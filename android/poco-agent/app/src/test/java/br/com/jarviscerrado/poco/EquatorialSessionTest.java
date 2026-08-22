@@ -41,19 +41,28 @@ public class EquatorialSessionTest {
         assertEquals(0, session.loginAttempts());
     }
 
-    @Test public void neverMoreThanTwoLoginsPerJob() {
+    @Test public void aReloadedFormIsRefilledAtMostFourTimes() {
         EquatorialSession session = new EquatorialSession(true);
         assertEquals(EquatorialSession.Decision.LOGIN,
             session.observe(EquatorialSession.State.SESSION_EXPIRED));
-        assertEquals(EquatorialSession.Decision.LOGIN,
-            session.observe(EquatorialSession.State.LOGIN_IN_PROGRESS));
-        // A terceira observação de sessão caída não tenta de novo pelo Chrome.
+        for (int i = 0; i < EquatorialSession.MAX_TRANSIENT_REFILLS; i++)
+            assertEquals(EquatorialSession.Decision.LOGIN,
+                session.observe(EquatorialSession.State.LOGIN_IN_PROGRESS));
+        // Quinta reaparição: acabou. Não há laço infinito.
         assertEquals(EquatorialSession.Decision.FALLBACK_WEBVIEW,
-            session.observe(EquatorialSession.State.SESSION_EXPIRED));
+            session.observe(EquatorialSession.State.LOGIN_IN_PROGRESS));
         session.markWebViewTried();
         assertEquals(EquatorialSession.Decision.FAIL_EXHAUSTED,
-            session.observe(EquatorialSession.State.SESSION_EXPIRED));
-        assertEquals(EquatorialSession.MAX_LOGIN_ATTEMPTS, session.loginAttempts());
+            session.observe(EquatorialSession.State.LOGIN_IN_PROGRESS));
+        assertEquals(1, session.loginAttempts());
+        assertEquals(EquatorialSession.MAX_TRANSIENT_REFILLS, session.transientRefills());
+    }
+
+    @Test public void anExplicitRejectionStillStopsBeforeAnyRefill() {
+        EquatorialSession session = new EquatorialSession(true);
+        assertEquals(EquatorialSession.Decision.FAIL_LOGIN_REJECTED,
+            session.observe(EquatorialSession.State.LOGIN_REJECTED));
+        assertEquals(0, session.transientRefills());
     }
 
     @Test public void rejectedCredentialsStopImmediatelyAndDoNotTryTheOtherEngine() {
@@ -274,6 +283,7 @@ public class EquatorialSessionTest {
         // Teto do laço maior que a soma das tentativas possíveis, para que o fim
         // venha de uma decisão terminal e não de o laço estourar.
         int worstCase = EquatorialSession.MAX_LOGIN_ATTEMPTS
+            + EquatorialSession.MAX_TRANSIENT_REFILLS
             + EquatorialSession.MAX_BROWSER_RECOVERIES + 2;
         assertTrue(EquatorialReader.MAX_ROUNDS >= worstCase);
     }

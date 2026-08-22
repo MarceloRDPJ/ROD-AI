@@ -238,6 +238,10 @@ public class AgentService extends Service {
             .put("saneago_configured", billing.saneagoReady())
             .put("equatorial_configured", billing.equatorialReady())
             .put("water_units", billing.waterCount()).put("energy_units", billing.energyCount())
+            // Somente nomes lógicos, nunca UC, CPF ou credencial. O Pi precisa
+            // destes nomes para montar o menu completo antes da primeira leitura.
+            .put("water_properties", billing.waterProperties())
+            .put("energy_properties", billing.energyProperties())
             .put("busy", busy)
             .put("pending_results", outbox == null ? 0 : outbox.pendingCount());
     }

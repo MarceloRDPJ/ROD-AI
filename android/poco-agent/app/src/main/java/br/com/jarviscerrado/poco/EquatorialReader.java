@@ -59,7 +59,7 @@ final class EquatorialReader {
     /** Abaixo disso não vale começar o motor alternativo: ele não terminaria. */
     static final long WEBVIEW_MIN_MILLIS = 60_000L;
     /** Voltas na máquina de estados. Cada volta consome tentativa ou termina. */
-    static final int MAX_ROUNDS = 8;
+    static final int MAX_ROUNDS = 10;
 
     static long screenBudget(long callTimeout, int steps, long margin) {
         return callTimeout * steps + margin;

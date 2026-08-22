@@ -79,11 +79,11 @@ public class MainActivity extends Activity {
         root.addView(statusCard, RodUi.cardParams(this));
 
         root.addView(RodUi.section(this, "CENTRAL ROD"));
-        root.addView(action("Contas de água e energia", "Cofre local, imóveis e acessos", v ->
+        root.addView(action("▤", "Contas e faturas", "Saneago, Equatorial e imóveis", v ->
             startActivity(new Intent(this, BillingSettingsActivity.class))));
-        root.addView(action("Conexão com o Raspberry Pi", "Endpoint e chave protegida", v ->
+        root.addView(action("⌁", "Conexão com o Pi", "Estado do nó e canal protegido", v ->
             startActivity(new Intent(this, ConnectionSettingsActivity.class))));
-        root.addView(action("Permissão de automação", "Estado da acessibilidade do ROD", v ->
+        root.addView(action("◎", "Automação local", "Permissão usada nas consultas", v ->
             startActivity(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))));
 
         root.addView(RodUi.section(this, "CAPACIDADES ATIVAS"));
@@ -94,7 +94,8 @@ public class MainActivity extends Activity {
         capabilities.addView(RodUi.statusRow(this, "Telegram", "Controlado pelo Pi", RodUi.CYAN));
         root.addView(capabilities, RodUi.cardParams(this));
 
-        TextView footer = RodUi.label(this, "ROD 0.2 // RDP STUDIO // DADOS LOCAIS");
+        TextView footer = RodUi.label(this,
+            "ROD " + BuildConfig.VERSION_NAME + " // RDP STUDIO // DADOS LOCAIS");
         footer.setGravity(Gravity.CENTER);
         footer.setPadding(0, RodUi.dp(this, 30), 0, RodUi.dp(this, 20));
         root.addView(footer);
@@ -102,15 +103,26 @@ public class MainActivity extends Activity {
         return scroll;
     }
 
-    private LinearLayout action(String title, String subtitle, android.view.View.OnClickListener click) {
+    private LinearLayout action(String glyph, String title, String subtitle,
+                                android.view.View.OnClickListener click) {
         LinearLayout card = RodUi.card(this);
-        card.setClickable(true);
-        card.setFocusable(true);
+        card.setOrientation(LinearLayout.HORIZONTAL);
+        card.setGravity(Gravity.CENTER_VERTICAL);
+        RodUi.makeInteractive(this, card);
         card.setOnClickListener(click);
-        card.addView(RodUi.text(this, title, 17, Color.WHITE, true));
-        TextView sub = RodUi.text(this, subtitle + "   ›", 13, RodUi.MUTED, false);
+        TextView icon = RodUi.icon(this, glyph);
+        card.addView(icon, new LinearLayout.LayoutParams(RodUi.dp(this, 44), RodUi.dp(this, 44)));
+        LinearLayout copy = new LinearLayout(this);
+        copy.setOrientation(LinearLayout.VERTICAL);
+        copy.setPadding(RodUi.dp(this, 14), 0, RodUi.dp(this, 10), 0);
+        copy.addView(RodUi.text(this, title, 17, Color.WHITE, true));
+        TextView sub = RodUi.text(this, subtitle, 13, RodUi.MUTED, false);
         sub.setPadding(0, RodUi.dp(this, 5), 0, 0);
-        card.addView(sub);
+        copy.addView(sub);
+        card.addView(copy, new LinearLayout.LayoutParams(0, -2, 1));
+        TextView arrow = RodUi.text(this, "›", 27, RodUi.ACCENT, false);
+        arrow.setGravity(Gravity.CENTER);
+        card.addView(arrow, new LinearLayout.LayoutParams(RodUi.dp(this, 24), -1));
         card.setLayoutParams(RodUi.cardParams(this));
         return card;
     }

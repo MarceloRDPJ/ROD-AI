@@ -11,6 +11,32 @@ O funcionamento normal não depende de ADB. ADB é usado apenas para preparaçã
 manutenção e desenvolvimento. Em produção, o Poco permanece carregando pela
 USB-C e comunica-se com o Pi pela rede Wi-Fi local.
 
+## Inventário seguro de contas
+
+Desde o agente 1.0.5, o heartbeat informa `water_properties` e
+`energy_properties`. Os valores não são números de unidade consumidora: são
+somente chaves lógicas de uma lista fechada (`casa`, `kitnet_01`, `kitnet_02`,
+`sala_comercial`, `restaurante`). O Pi valida novamente essa lista antes de
+persistir. CPF, data, login, senha e números de conta continuam exclusivamente
+no Android Keystore.
+
+O Telegram pode assim montar o menu completo antes da primeira leitura. Agentes
+Android antigos continuam compatíveis: o Pi usa o histórico confirmado e deixa
+claro que recebeu apenas contagens.
+
+## Espera e recuperação
+
+O Telegram mantém uma única mensagem por consulta. Se a tarefa ultrapassar
+quatro segundos, essa mensagem recebe estados qualitativos e o indicador de
+digitação é renovado. Não há porcentagem falsa: os portais não expõem progresso
+mensurável.
+
+Na Equatorial, a reaparição do formulário depois do envio, sem mensagem de
+recusa, é um reload transitório. O ROD preenche novamente os dados do cofre em
+no máximo quatro reaparições. Recusa explícita e verificação humana continuam
+terminais. Não se usa solucionador de CAPTCHA, token fabricado, bypass de SMS ou
+biblioteca WhatsApp não oficial.
+
 ## Responsabilidades
 
 ### Raspberry Pi

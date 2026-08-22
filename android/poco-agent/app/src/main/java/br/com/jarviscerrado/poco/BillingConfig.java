@@ -1,6 +1,7 @@
 package br.com.jarviscerrado.poco;
 
 import android.content.Context;
+import org.json.JSONArray;
 import org.json.JSONObject;
 
 final class BillingConfig {
@@ -20,6 +21,8 @@ final class BillingConfig {
     }
     int waterCount() { return countSuffix("_water"); }
     int energyCount() { return countSuffix("_energy"); }
+    JSONArray waterProperties() { return propertiesWith("_water"); }
+    JSONArray energyProperties() { return propertiesWith("_energy"); }
     String value(String key) { return data.optString(key, "").trim(); }
     private boolean present(String key) { return !value(key).isEmpty(); }
     private String digits(String key) { return value(key).replaceAll("\\D", ""); }
@@ -28,5 +31,11 @@ final class BillingConfig {
         for (String property : new String[]{"kitnet_01", "kitnet_02", "sala_comercial", "casa", "restaurante"})
             if (!value(property + suffix).isEmpty()) count++;
         return count;
+    }
+    private JSONArray propertiesWith(String suffix) {
+        JSONArray result = new JSONArray();
+        for (String property : new String[]{"kitnet_01", "kitnet_02", "sala_comercial", "casa", "restaurante"})
+            if (!value(property + suffix).isEmpty()) result.put(property);
+        return result;
     }
 }

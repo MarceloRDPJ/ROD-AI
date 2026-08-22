@@ -165,6 +165,20 @@ def test_heartbeat_carries_busy_and_pending_results(tmp_path):
     assert heartbeat["pending_results"] == 3
 
 
+def test_heartbeat_keeps_only_known_property_names(tmp_path):
+    """O menu recebe nomes lógicos, nunca texto arbitrário ou identificadores."""
+    service = PocoNodeService(tmp_path / "poco.json", "secret")
+    service.record_heartbeat({
+        "water_properties": ["casa", "kitnet_01", "casa", "20425805"],
+        "energy_properties": ["restaurante", "../../segredo", "sala_comercial"],
+    })
+
+    heartbeat = service.status()["heartbeat"]
+    assert heartbeat["water_properties"] == ["casa", "kitnet_01"]
+    assert heartbeat["energy_properties"] == ["restaurante", "sala_comercial"]
+    assert "20425805" not in (tmp_path / "poco.json").read_text(encoding="utf-8")
+
+
 def test_lease_requeue_never_resurrects_a_terminal_job(tmp_path):
     """Negative guard: a finished job must never be dispatched a second time."""
     now = [1000.0]

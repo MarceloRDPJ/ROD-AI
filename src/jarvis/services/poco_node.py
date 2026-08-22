@@ -254,6 +254,16 @@ class PocoNodeService:
             return job
 
     def record_heartbeat(self, payload: dict[str, Any]) -> dict[str, Any]:
+        allowed_properties = {"kitnet_01", "kitnet_02", "sala_comercial", "casa", "restaurante"}
+
+        def property_names(field: str) -> list[str]:
+            value = payload.get(field, [])
+            if not isinstance(value, list):
+                return []
+            # Lista fechada: o heartbeat não vira um canal para exfiltrar UC,
+            # documento ou qualquer texto arbitrário do cofre Android.
+            return [item for item in dict.fromkeys(value) if item in allowed_properties]
+
         safe = {
             "node_id": str(payload.get("node_id", ""))[:64],
             "battery_level": self._number(payload.get("battery_level"), 0, 100),
@@ -273,6 +283,8 @@ class PocoNodeService:
             "equatorial_configured": bool(payload.get("equatorial_configured", False)),
             "water_units": int(self._number(payload.get("water_units"), 0, 8) or 0),
             "energy_units": int(self._number(payload.get("energy_units"), 0, 8) or 0),
+            "water_properties": property_names("water_properties"),
+            "energy_properties": property_names("energy_properties"),
             "busy": bool(payload.get("busy", False)),
             "pending_results": int(self._number(payload.get("pending_results"), 0, 999) or 0),
             "received_at": self.clock(),

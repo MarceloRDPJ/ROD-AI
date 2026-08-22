@@ -4,6 +4,8 @@ import android.content.Context;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
+import android.graphics.drawable.RippleDrawable;
+import android.content.res.ColorStateList;
 import android.view.Gravity;
 import android.widget.LinearLayout;
 import android.widget.TextView;
@@ -38,6 +40,26 @@ final class RodUi {
         card.setBackground(bg);
         card.setElevation(dp(c, 2));
         return card;
+    }
+    static void makeInteractive(Context c, LinearLayout card) {
+        GradientDrawable surface = new GradientDrawable();
+        surface.setColor(SURFACE);
+        surface.setCornerRadius(dp(c, 18));
+        surface.setStroke(dp(c, 1), LINE);
+        card.setBackground(new RippleDrawable(
+            ColorStateList.valueOf(Color.argb(70, 178, 217, 139)), surface, null));
+        card.setClickable(true);
+        card.setFocusable(true);
+        card.setMinimumHeight(dp(c, 76));
+    }
+    static TextView icon(Context c, String value) {
+        TextView view = text(c, value, 22, BG, true);
+        view.setGravity(Gravity.CENTER);
+        GradientDrawable bg = new GradientDrawable();
+        bg.setShape(GradientDrawable.OVAL);
+        bg.setColor(ACCENT);
+        view.setBackground(bg);
+        return view;
     }
     static LinearLayout.LayoutParams cardParams(Context c) {
         LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(-1, -2);

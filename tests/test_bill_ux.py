@@ -1285,6 +1285,26 @@ async def test_a_failed_water_reading_confirms_nothing(monkeypatch):
     assert callback_data(executor._bills_menu()["reply_markup"]) == ["help"]
 
 
+def test_bill_menu_uses_safe_property_names_reported_by_the_poco(monkeypatch):
+    """O cofre configurado deve aparecer antes da primeira consulta concluída."""
+    executor = build_executor(monkeypatch)
+    monkeypatch.setattr(executor, "_poco_heartbeat", lambda: {
+        "water_units": 2,
+        "energy_units": 2,
+        "water_properties": ["casa", "restaurante"],
+        "energy_properties": ["casa", "sala_comercial"],
+        "saneago_configured": True,
+        "equatorial_configured": True,
+    })
+
+    menu = executor._bills_menu()
+    data = callback_data(menu["reply_markup"])
+    assert "bill_menu:casa" in data
+    assert "bill_menu:restaurante" in data
+    assert "bill_menu:sala_comercial" in data
+    assert "só a contagem" not in menu["text"]
+
+
 @pytest.mark.asyncio
 async def test_water_failure_never_shows_the_raw_error(monkeypatch):
     """A saída antiga colava o texto cru do telefone na tela do dono."""

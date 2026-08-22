@@ -10,6 +10,24 @@ Use frases naturais pelo Telegram. Acentos, maiúsculas e vários erros comuns s
 
 O ROD não é um chatbot de conhecimento geral. Se a mensagem não corresponder a uma skill confiável, ele explica o que pode consultar em vez de inventar uma resposta.
 
+## Contas e faturas
+
+Abra **Menu > Contas & faturas** e escolha o imóvel. O menu usa somente os nomes
+lógicos configurados no Poco; números de conta e credenciais não são enviados ao
+Pi. Durante uma busca demorada, o ROD atualiza a própria mensagem. Não é preciso
+tocar novamente.
+
+A resposta ao vivo mostra o horário e apenas os campos realmente lidos. Se o
+portal falhar, uma leitura guardada pode aparecer com idade explícita. PIX e
+boleto nunca são oferecidos sobre leitura guardada.
+
+Na Equatorial, **ATUALIZAR** força uma nova tentativa. Se o formulário oficial
+recarregar silenciosamente, o Poco o preenche outra vez dentro de um limite. Um
+CAPTCHA, bloqueio antifraude ou recusa de cadastro é reportado sem contorno.
+
+O APK 1.0.5 usa a identidade escura da RDP Studio e controles com área de toque,
+feedback visual e hierarquia operacional. A versão instalada aparece no rodapé.
+
 ## Menus e botões
 
 ### Menu principal

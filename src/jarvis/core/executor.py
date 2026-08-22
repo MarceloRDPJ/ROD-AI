@@ -43,8 +43,8 @@ POCO_BOLETO_ACTION = "get_equatorial_boleto"
 # anterior — erro caro e silencioso.
 BILL_ARTIFACT_TTL_SECONDS = 900
 
-# Imóveis que já tiveram uma leitura concluída. É a única prova local de que a
-# unidade existe no cofre do Poco; o heartbeat expõe contagem, não nomes.
+# Imóveis que já tiveram uma leitura concluída. Continua sendo a prova histórica;
+# versões novas do Poco também expõem somente os nomes lógicos configurados.
 BILL_STATE_KEY = "bill_properties_confirmed"
 
 # Mensagens de falha que o dono lê. Código tipado, nome de exceção e traceback
@@ -1466,8 +1466,43 @@ class Executor:
                 return message_id
             except Exception:
                 logger.debug("Edição da mensagem de fatura falhou", exc_info=True)
-                return message_id
+                return await self._send_bill_text(chat_id, text, reply_markup)
         return await self._send_bill_text(chat_id, text, reply_markup)
+
+    async def _bill_progress(self, chat_id: int, message_id, provider: str, label: str):
+        """Mantém presença verdadeira durante uma consulta demorada.
+
+        Não há porcentagem: os portais não informam progresso mensurável. A cada
+        etapa apenas dizemos o que o ROD de fato sabe — o job foi entregue ao
+        Poco e ainda está em execução — e renovamos o indicador ``typing`` do
+        Telegram, que expira sozinho em poucos segundos.
+        """
+        stages = (
+            "O Poco recebeu a consulta e está abrindo o serviço.",
+            "A consulta continua no Poco; estou aguardando a tela da fatura.",
+            "Ainda estou conferindo a resposta. Não precisa tocar novamente.",
+        )
+        try:
+            # Consulta rápida não pisca nem gera edições inúteis.
+            await asyncio.sleep(4)
+            for stage in stages:
+                action = getattr(self.app.bot, "send_chat_action", None)
+                if callable(action):
+                    try:
+                        await action(chat_id=chat_id, action="typing")
+                    except Exception:
+                        logger.debug("Indicador typing indisponível", exc_info=True)
+                await self._replace_bill_message(
+                    chat_id,
+                    message_id,
+                    f"{bill_screen.render_wait(provider, label)}\n\n{stage}\n\n◌ Em andamento",
+                )
+                await asyncio.sleep(8)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            # Progresso é apresentação: nunca pode derrubar a consulta real.
+            logger.debug("Não consegui atualizar o progresso da fatura", exc_info=True)
 
     async def _equatorial_bill_flow(
         self, chat_id: int, property_key: str, query=None, *, forced: bool = False
@@ -1518,10 +1553,17 @@ class Executor:
             await self._replace_bill_message(chat_id, message_id, header)
         else:
             message_id = await self._send_bill_text(chat_id, header)
-
-        (text, ok), _reused = await self._single_flight(
-            provider, property_key, "bills", card, forced=forced
-        )
+        progress = asyncio.create_task(self._bill_progress(chat_id, message_id, provider, label))
+        try:
+            (text, ok), _reused = await self._single_flight(
+                provider, property_key, "bills", card, forced=forced
+            )
+        finally:
+            progress.cancel()
+            try:
+                await progress
+            except asyncio.CancelledError:
+                pass
         # Água não tem entrega de artefato hoje: oferecer PIX ali seria um botão
         # que só sabe dizer "não habilitado".
         payment = ok and provider == "equatorial"
@@ -2038,7 +2080,13 @@ class Executor:
         """
         heartbeat = self._poco_heartbeat()
         confirmed = self._confirmed_bill_properties()
-        properties = sorted({key for keys in confirmed.values() for key in keys})
+        configured = set()
+        if heartbeat:
+            for field in ("water_properties", "energy_properties"):
+                values = heartbeat.get(field, [])
+                if isinstance(values, list):
+                    configured.update(str(value) for value in values)
+        properties = sorted(configured | {key for keys in confirmed.values() for key in keys})
 
         rows = []
         try:
@@ -2062,22 +2110,25 @@ class Executor:
 
         lines = ["🧾 CONTAS & FATURAS", ""]
         if properties:
-            lines.append("Imóveis com consulta já concluída (é a lista que eu posso provar):")
+            lines.append("Escolha o imóvel para consultar:")
         else:
             lines.append("Ainda não concluí nenhuma consulta, então não tenho imóvel confirmado.")
         if heartbeat:
-            lines.append(
+            inventory = (
                 f"O Poco reporta {int(heartbeat.get('energy_units') or 0)} unidade(s) de energia e "
-                f"{int(heartbeat.get('water_units') or 0)} de água no cofre — só a contagem, "
-                "sem os nomes."
+                f"{int(heartbeat.get('water_units') or 0)} de água no cofre."
             )
+            if not configured:
+                inventory = inventory[:-1] + " — esta versão ainda chegou sem os nomes."
+            lines.append(inventory)
         else:
             lines.append("O Poco não está reportando agora, então não sei o que está no cofre.")
-        lines.append("")
-        lines.append(
-            "Para um imóvel que não aparece aqui, peça uma vez pelo nome — por exemplo "
-            "conta de luz kitnet 01. Depois de concluir, ele entra neste menu."
-        )
+        if not configured:
+            lines.append("")
+            lines.append(
+                "Se um imóvel não aparecer, peça uma vez pelo nome — por exemplo "
+                "conta de luz kitnet 01."
+            )
         return {"text": "\n".join(lines), "reply_markup": reply_markup}
 
     def _bill_property_menu(self, property_key: str) -> Dict[str, Any]:
@@ -2089,6 +2140,8 @@ class Executor:
         water = property_key in confirmed.get("saneago", [])
         energy = property_key in confirmed.get("equatorial", [])
         if heartbeat:
+            water = water or property_key in heartbeat.get("water_properties", [])
+            energy = energy or property_key in heartbeat.get("energy_properties", [])
             if not heartbeat.get("saneago_configured", True):
                 water = False
             if not heartbeat.get("equatorial_configured", True):

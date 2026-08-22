@@ -83,11 +83,14 @@ final class EquatorialSession {
 
     /** Duas, e não mais: a terceira já seria insistência contra a conta do dono. */
     static final int MAX_LOGIN_ATTEMPTS = 2;
+    /** Reaparições transitórias do formulário depois do envio (reload do portal). */
+    static final int MAX_TRANSIENT_REFILLS = 4;
     /** Recarregar, e depois reabrir. Além disso o problema não é o navegador. */
     static final int MAX_BROWSER_RECOVERIES = 2;
 
     private final boolean credentialsAvailable;
     private int loginAttempts;
+    private int transientRefills;
     private int browserRecoveries;
     private boolean webViewTried;
 
@@ -96,6 +99,7 @@ final class EquatorialSession {
     }
 
     int loginAttempts() { return loginAttempts; }
+    int transientRefills() { return transientRefills; }
     int browserRecoveries() { return browserRecoveries; }
     boolean webViewTried() { return webViewTried; }
 
@@ -124,8 +128,19 @@ final class EquatorialSession {
             case HUMAN_CHECK:
                 if (!webViewTried) return Decision.FALLBACK_WEBVIEW;
                 return Decision.FAIL_HUMAN_CHECK;
-            case SESSION_EXPIRED:
             case LOGIN_IN_PROGRESS:
+                if (!credentialsAvailable) return Decision.FAIL_NO_CREDENTIALS;
+                // O portal de Goiás às vezes recarrega o próprio formulário
+                // depois do envio sem exibir recusa. Isso não é uma credencial
+                // errada: é uma etapa transitória. Repreenchemos de forma
+                // limitada e paramos imediatamente se surgir recusa ou CAPTCHA.
+                if (transientRefills < MAX_TRANSIENT_REFILLS) {
+                    transientRefills++;
+                    return Decision.LOGIN;
+                }
+                if (!webViewTried) return Decision.FALLBACK_WEBVIEW;
+                return Decision.FAIL_EXHAUSTED;
+            case SESSION_EXPIRED:
                 if (!credentialsAvailable) return Decision.FAIL_NO_CREDENTIALS;
                 if (loginAttempts < MAX_LOGIN_ATTEMPTS) {
                     loginAttempts++;

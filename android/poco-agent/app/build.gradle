@@ -18,9 +18,11 @@ android {
         // MY_PACKAGE_REPLACED. 34 / 1.0.2: segundo caminho de religamento pelo
         // rebind da acessibilidade, e versionCode no heartbeat. 35 / 1.0.3:
         // evidencia persistente da ponte. 36 / 1.0.4: espera do funil de
-        // debitos baseada em mudança de etapa, não em animação do DOM.
-        versionCode 36
-        versionName '1.0.4'
+        // debitos baseada em mudança de etapa, não em animação do DOM. 37 /
+        // 1.0.5: inventário seguro, UI operacional e recuperação limitada de
+        // recargas transitórias do formulário da Equatorial.
+        versionCode 37
+        versionName '1.0.5'
     }
 
     buildTypes {
