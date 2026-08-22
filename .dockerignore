@@ -11,6 +11,9 @@ __pycache__/
 *.db
 *.sqlite*
 models/
+android/poco-agent/.gradle/
+android/poco-agent/build/
+android/poco-agent/app/build/
 src/jarvis/storage/artifacts/
 src/jarvis/storage/poco_node.json
 tests/
