@@ -11,6 +11,8 @@ __pycache__/
 *.db
 *.sqlite*
 models/
+src/jarvis/storage/artifacts/
+src/jarvis/storage/poco_node.json
 tests/
 docs/
 debug_fuzz.py
