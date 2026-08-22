@@ -608,7 +608,7 @@ final class EquatorialWebEngine {
         // aqui é a MUDANÇA do conteúdo, com prazo.
         JSONObject changed = awaitDebtContent(
             Math.min(deadline, System.currentTimeMillis() + LOGIN_WAIT_MILLIS),
-            where.optInt("chars", 0));
+            picked.optInt("visible_selects", 1));
         // Um submit que não vira requisição significa que o próprio script da
         // página interceptou e desistiu. Duas causas conhecidas neste portal:
         // validação recusando o formulário, e o token de reCAPTCHA que o login
@@ -656,7 +656,7 @@ final class EquatorialWebEngine {
             result.put("followed_anchor", true);
             changed = awaitDebtContent(
                 Math.min(deadline, System.currentTimeMillis() + LOGIN_WAIT_MILLIS),
-                changed.optInt("chars", 0));
+                changed.optInt("selects", 0));
             JSONObject landed = whereAmI();
             result.put("anchor_host", landed.optString("host", ""))
                   .put("anchor_path", landed.optString("path", ""));
@@ -746,17 +746,24 @@ final class EquatorialWebEngine {
      * marcas de moeda e o número de linhas de tabela. Um funil que listou débito
      * mexe em pelo menos um deles; um funil que não fez nada não mexe em nenhum.
      */
-    private JSONObject awaitDebtContent(long limit, int charsBefore) throws Exception {
+    private JSONObject awaitDebtContent(long limit, int selectsBefore) throws Exception {
         String script =
             "(function(){var t=document.body?document.body.innerText:'';"
             + "var m=t.match(/R\\$/g);"
+            + "var s=document.querySelectorAll('select'),vs=0;"
+            + "for(var i=0;i<s.length;i++)if(s[i].offsetParent)vs++;"
+            + "var f=t.normalize('NFD').replace(/[\\u0300-\\u036f]/g,'')"
+            + ".toLowerCase();"
+            + "var notice=/(nao ha debito|nenhum debito|sem debito|nao possui debito|"
+            + "nenhuma fatura|nenhuma conta|em dia|nao foram encontrados|"
+            + "nao encontramos|nenhum registro|nada consta|adimplente|quitad)/.test(f);"
             + "return JSON.stringify({chars:t.trim().length,currency:(m?m.length:0),"
-            + "rows:document.querySelectorAll('table tr').length});})()";
+            + "rows:document.querySelectorAll('table tr').length,selects:vs,notice:notice});})()";
         JSONObject seen = new JSONObject(evalJson(script));
         while (System.currentTimeMillis() < limit
-            && seen.optInt("chars", 0) == charsBefore
-            && seen.optInt("currency", 0) == 0
-            && seen.optInt("rows", 0) == 0) {
+            && !AgenciaWebLogin.debtStepChanged(selectsBefore,
+                seen.optInt("selects", 0), seen.optInt("currency", 0),
+                seen.optInt("rows", 0), seen.optBoolean("notice", false))) {
             Thread.sleep(POLL_MILLIS * 2);
             seen = new JSONObject(evalJson(script));
         }
@@ -791,18 +798,19 @@ final class EquatorialWebEngine {
             + "function norm(v){v=(v||'').replace(/\\D/g,'');return v.replace(/^0+(?!$)/,'');}"
             + "var want=norm(" + JSONObject.quote(unit == null ? "" : unit) + ");"
             + "if(!want) return JSON.stringify({options:0,matches:0,selected:false});"
-            + "for(var s=0;s<sels.length;s++){var el=sels[s];"
+            + "var visible=0;for(var s=0;s<sels.length;s++){var el=sels[s];"
             + "if(!el.offsetParent) continue;"
+            + "visible++;"
             + "var hits=[];"
             + "for(var i=0;i<el.options.length;i++){"
             + "if(norm(el.options[i].text)===want||norm(el.options[i].value)===want) hits.push(i);}"
             + "if(hits.length===1){el.selectedIndex=hits[0];"
             + "el.dispatchEvent(new Event('change',{bubbles:true}));"
-            + "return JSON.stringify({options:el.options.length,matches:1,selected:true});}"
+            + "return JSON.stringify({options:el.options.length,matches:1,selected:true,visible_selects:visible});}"
             + "if(hits.length>1)"
             + "return JSON.stringify({options:el.options.length,matches:hits.length,selected:false});}"
             + "var first=sels.length?sels[0].options.length:0;"
-            + "return JSON.stringify({options:first,matches:0,selected:false});})()";
+            + "return JSON.stringify({options:first,matches:0,selected:false,visible_selects:visible});})()";
         return new JSONObject(evalJson(script));
     }
 

@@ -1,0 +1,8 @@
+{"t":"2026-08-22T18:36:11","passo":"antes/segunda-via","login_form":false,"chars":100,"host":"goias.equatorialenergia.com.br","path":"/Suporte.aspx","notice":"indisponivel","erro_de_rede":false}
+{"t":"2026-08-22T18:36:12","passo":"antes/logingo","login_form":true,"chars":58,"host":"goias.equatorialenergia.com.br","path":"/LoginGO.aspx","erro_de_rede":false}
+{"t":"2026-08-22T18:36:13","passo":"login","desfecho":"GO_LOGIN_OK","estado":"SESSION_VALID","sessao_ja_estava_aberta":true}
+{"t":"2026-08-22T18:36:14","passo":"area-autenticada","host":"go.equatorialenergia.com.br","path":"/sua-conta/","chars":2537}
+{"t":"2026-08-22T18:36:15","passo":"rota","rotulo":"host das faturas","destino":"goias.equatorialenergia.com.br/LoginGO.aspx","pediu_login":true}
+{"t":"2026-08-22T18:36:24","passo":"depois/logingo","login_form":true,"chars":58,"host":"goias.equatorialenergia.com.br","path":"/LoginGO.aspx","erro_de_rede":false}
+{"t":"2026-08-22T18:36:24","passo":"controle","host_de_faturas_respondeu":true,"rotas_do_mesmo_host_diferem":true,"login_ainda_exigido_apos_sessao_go":true}
+{"t":"2026-08-22T18:36:24","passo":"veredito","ponte":"CLOSED","login_go":"GO_LOGIN_OK"}

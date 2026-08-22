@@ -303,6 +303,21 @@ final class AgenciaWebLogin {
             : ReadProvider.READ_PROVIDER_UNAVAILABLE;
     }
 
+    /**
+     * O funil realmente saiu da escolha de unidade?
+     *
+     * Alteração isolada no tamanho do texto não vale: banners de cookies e o
+     * reCAPTCHA mudam o DOM enquanto a mesma etapa continua aberta. Só há
+     * avanço quando surge conteúdo de fatura/conta em dia ou quando o seletor
+     * visível da etapa desaparece.
+     */
+    static boolean debtStepChanged(int selectsBefore, int selectsNow,
+                                   int currencyMarks, int tableRows,
+                                   boolean debtNotice) {
+        return currencyMarks > 0 || tableRows > 0 || debtNotice
+            || selectsNow < selectsBefore;
+    }
+
     // ------------------------------------------------------- ponte entre hosts
 
     /**

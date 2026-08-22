@@ -16,9 +16,11 @@ android {
         // numero para binario distinto apagava a rastreabilidade do que esta de
         // fato instalado no aparelho. 33 / 1.0.1: religamento por
         // MY_PACKAGE_REPLACED. 34 / 1.0.2: segundo caminho de religamento pelo
-        // rebind da acessibilidade, e versionCode no heartbeat.
-        versionCode 34
-        versionName '1.0.2'
+        // rebind da acessibilidade, e versionCode no heartbeat. 35 / 1.0.3:
+        // evidencia persistente da ponte. 36 / 1.0.4: espera do funil de
+        // debitos baseada em mudança de etapa, não em animação do DOM.
+        versionCode 36
+        versionName '1.0.4'
     }
 
     buildTypes {

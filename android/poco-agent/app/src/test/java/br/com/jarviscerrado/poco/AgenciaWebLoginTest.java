@@ -318,6 +318,22 @@ public class AgenciaWebLoginTest {
     }
 
     @Test
+    public void cosmeticTextChangesDoNotPretendTheDebtStepAdvanced() {
+        // Banner de cookies e reCAPTCHA alteram caracteres, mas não aparecem
+        // neste contrato: com o seletor ainda presente e sem conteúdo de conta,
+        // a espera precisa continuar.
+        assertFalse(AgenciaWebLogin.debtStepChanged(1, 1, 0, 0, false));
+    }
+
+    @Test
+    public void debtContentOrLeavingTheSelectorEndsTheWait() {
+        assertTrue(AgenciaWebLogin.debtStepChanged(1, 0, 0, 0, false));
+        assertTrue(AgenciaWebLogin.debtStepChanged(1, 1, 1, 0, false));
+        assertTrue(AgenciaWebLogin.debtStepChanged(1, 1, 0, 1, false));
+        assertTrue(AgenciaWebLogin.debtStepChanged(1, 1, 0, 0, true));
+    }
+
+    @Test
     public void anAccountWithNothingOwedIsAnAnswerAndNotAFailure() {
         // Sem esta distincao, dono com a conta paga receberia "o canal nao
         // funciona" e mandaria consertar o que ja estava certo.
