@@ -41,14 +41,14 @@ public class EquatorialSessionTest {
         assertEquals(0, session.loginAttempts());
     }
 
-    @Test public void aReloadedFormIsRefilledAtMostFourTimes() {
+    @Test public void aSubmittedFormIsOnlyObservedAndNeverResubmitted() {
         EquatorialSession session = new EquatorialSession(true);
         assertEquals(EquatorialSession.Decision.LOGIN,
             session.observe(EquatorialSession.State.SESSION_EXPIRED));
         for (int i = 0; i < EquatorialSession.MAX_TRANSIENT_REFILLS; i++)
-            assertEquals(EquatorialSession.Decision.LOGIN,
+            assertEquals(EquatorialSession.Decision.WAIT,
                 session.observe(EquatorialSession.State.LOGIN_IN_PROGRESS));
-        // Quinta reaparição: acabou. Não há laço infinito.
+        // Quinta observação sem veredito: acabou. Não há laço nem novo POST.
         assertEquals(EquatorialSession.Decision.FALLBACK_WEBVIEW,
             session.observe(EquatorialSession.State.LOGIN_IN_PROGRESS));
         session.markWebViewTried();

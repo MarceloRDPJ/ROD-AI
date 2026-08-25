@@ -436,4 +436,21 @@ public class EquatorialParserTest {
 
         assertEquals(EquatorialTextParser.State.NO_BILL, result.state);
     }
+
+    @Test
+    public void bemobiCheckoutListingIsARealBillNotAnInDayBanner() {
+        String page = "Selecione as faturas que deseja pagar\n"
+            + "REF.\nVENC.\nSTATUS\nVALOR\n"
+            + "Agosto\n11/08/2026\nVencido\nR$ 463,61\n"
+            + "Fatura 07/2026\nTotal a pagar R$ 463,61\n"
+            + "Programa Energia em Dia\n";
+
+        EquatorialTextParser.Page result = EquatorialTextParser.parse(page);
+
+        assertEquals(EquatorialTextParser.State.BILL, result.state);
+        assertEquals("463,61", result.get("amount"));
+        assertEquals("07/2026", result.get("reference"));
+        assertEquals("11/08/2026", result.get("due_date"));
+        assertEquals("", AgenciaWebLogin.debtNotice(EquatorialSession.fold(page)));
+    }
 }

@@ -12,7 +12,13 @@ import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import java.io.File;
 import java.io.FileOutputStream;
+import java.io.BufferedReader;
+import java.io.InputStream;
+import java.io.InputStreamReader;
 import java.io.OutputStreamWriter;
+import java.net.HttpURLConnection;
+import java.net.URL;
+import java.nio.charset.StandardCharsets;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Date;
@@ -59,6 +65,24 @@ final class EquatorialWebEngine {
     private static final long POLL_MILLIS = 400L;
     /** Prazo do veredito do login: o portal gera o token de risco antes de enviar. */
     private static final long LOGIN_WAIT_MILLIS = 30_000L;
+    /**
+     * BFF usado pelo aplicativo oficial da Equatorial para Goiás.
+     *
+     * A rota não foi adivinhada: foi conferida no APK oficial 4.10.5 instalado
+     * no Poco. O aplicativo chama GET /api/v2/faturas/em-aberto/{UC} com o JWT
+     * Bearer obtido no login. O mesmo JWT é emitido pela Agência Web e fica no
+     * localStorage deste WebView; ele só atravessa a memória do processo e nunca
+     * é persistido, devolvido ao Pi ou escrito em log.
+     */
+    static final String GO_APP_BFF = "https://api06.equatorialenergia.com.br/bff-go";
+    // Goiás possui implementação própria no bundle oficial. O módulo genérico
+    // usa v2, mas ListaFaturasGo importa explicitamente o módulo GO, que usa v1.
+    static final String GO_OPEN_BILLS_PATH = "/api/v1/faturas/em-aberto/";
+    /** Rota de débitos que o próprio scripts-dist.js do site e o APK carregam. */
+    static final String GO_DEBTS_PATH = "/api/v1/debitos/";
+    static final String GO_CUSTOMER_ACCOUNTS_PATH = "/api/v2/clientes/";
+    static final String GO_INSTALLATION_PATH = "/api/v1/instalacao/";
+    private static final int BFF_TIMEOUT_MILLIS = 25_000;
 
     private final Handler main = new Handler(Looper.getMainLooper());
     private final AtomicBoolean failed = new AtomicBoolean(false);
@@ -547,6 +571,185 @@ final class EquatorialWebEngine {
         }
     }
 
+    /**
+     * Resolves a pre-migration identifier through the official CPF challenge.
+     *
+     * The Goiás site still ships this exact flow in {@code scripts-dist.js}: CPF
+     * plus the first registered challenge (birth date), protected by its own
+     * reCAPTCHA, returns a JWT whose {@code ContasContrato} contains the holder's
+     * contracts. We use the same same-origin endpoint and the same challenge;
+     * no CAPTCHA is bypassed and no bearer token leaves this WebView.
+     */
+    static String resolveLegacyUnit(Context context, String legacyUnit, String document,
+                                    String birthDate, List<String> knownUnits, long deadline)
+            throws Exception {
+        EquatorialWebEngine engine = new EquatorialWebEngine();
+        try {
+            return engine.runResolveLegacy(context.getApplicationContext(), legacyUnit,
+                document, birthDate, knownUnits, deadline);
+        } finally {
+            engine.destroy();
+        }
+    }
+
+    private String runResolveLegacy(Context context, String legacyUnit, String document,
+                                    String birthDate, List<String> knownUnits, long deadline)
+            throws Exception {
+        String cpf = document == null ? "" : document.replaceAll("\\D", "");
+        String legacy = legacyUnit == null ? "" : legacyUnit.replaceAll("\\D", "");
+        String[] date = birthDate == null ? new String[0] : birthDate.trim().split("/");
+        if (cpf.length() != 11 || legacy.isEmpty() || date.length != 3)
+            throw new IllegalStateException(
+                "EQUATORIAL_AUTH_REQUIRED: identidade do titular incompleta no cofre");
+        String isoDate = date[2] + "-" + date[1] + "-" + date[0];
+
+        create(context);
+        String anchor = "";
+        if (knownUnits != null) {
+            for (String candidate : knownUnits) {
+                String digits = candidate == null ? "" : candidate.replaceAll("\\D", "");
+                if (digits.length() > 8) { anchor = digits; break; }
+            }
+        }
+        if (!anchor.isEmpty()) {
+            EquatorialSession.State state = ensureAgenciaWebSession(anchor, cpf, deadline);
+            RodLog.step("contratos", "sessao da UC de vinculo=" + AgenciaWebLogin.outcome(state));
+        } else {
+            load(AgenciaWebLogin.ACCOUNT_URL, deadline);
+        }
+
+        String siteJwt = evalJson(
+            "(function(){try{return localStorage.getItem('jwt')||'';}catch(e){return '';}})()");
+        if (!siteJwt.isEmpty()) {
+            try {
+                HttpResult accounts = getOfficialCustomerAccounts(cpf, siteJwt);
+                RodLog.step("contratos", "lista atual HTTP=" + accounts.status);
+                if (accounts.status == 200) {
+                    String mapped = EquatorialContractMapper.resolve(
+                        accountsArray(accounts.body), legacy, knownUnits);
+                    if (!mapped.isEmpty()) {
+                        RodLog.step("contratos", "UC legada reconciliada pela API atual do titular");
+                        return mapped;
+                    }
+                }
+
+                HttpResult installation = getOfficialInstallation(legacy, siteJwt);
+                RodLog.step("contratos", "instalacao oficial HTTP=" + installation.status);
+                if (installation.status == 200) {
+                    String mapped = EquatorialContractMapper.resolve(
+                        "[" + installation.body + "]", legacy, knownUnits);
+                    if (!mapped.isEmpty()) {
+                        RodLog.step("contratos", "UC legada reconciliada pela instalacao oficial");
+                        return mapped;
+                    }
+                }
+            } finally {
+                siteJwt = "";
+            }
+        }
+
+        // Compatibility endpoint still present in the site's own bundle. It is
+        // attempted last because some deployments have already retired it.
+        String start =
+            "(function(){"
+            + "window.__rodLegacy={done:false};"
+            + "if(typeof grecaptcha==='undefined'){window.__rodLegacy={done:true,error:'recaptcha'};"
+            + "return JSON.stringify({started:false});}"
+            + "var run=function(){grecaptcha.execute('6LdAU6MZAAAAAH5H4xrPFwLorQiMdF94mOJtKVo3',"
+            + "{action:'login'}).then(function(token){"
+            + "var body=new URLSearchParams();"
+            + "body.set('grant_type','password');"
+            + "body.set('username','1:' + " + JSONObject.quote(cpf) + ");"
+            + "body.set('password'," + JSONObject.quote(isoDate) + ");"
+            + "body.set('actiongr','login');body.set('tokengr',token);"
+            + "body.set('credenciado','');body.set('navegador','browser');"
+            + "body.set('dispositivo','device');body.set('ip','10.10.10.1.1');"
+            + "body.set('empresaId',' ');"
+            + "return fetch((localStorage.getItem('site_base_url')||location.origin)"
+            + "+'/ajax-requests/autenticacao',{method:'POST',credentials:'same-origin',"
+            + "headers:{'Content-Type':'application/x-www-form-urlencoded'},body:body.toString()});"
+            + "}).then(async function(response){var data={};try{data=await response.json();}catch(e){}"
+            + "var jwt=data&&data.auth&&data.auth.access_token||'';var accounts=[];"
+            + "if(jwt){try{var part=jwt.split('.')[1].replace(/-/g,'+').replace(/_/g,'/');"
+            + "while(part.length%4)part+='=';var payload=JSON.parse(atob(part));"
+            + "accounts=payload&&payload.userData&&payload.userData.ContasContrato||[];}catch(e){}}"
+            + "jwt='';data=null;window.__rodLegacy={done:true,http:response.status,"
+            + "authenticated:accounts.length>0,accounts:JSON.stringify(accounts)};"
+            + "}).catch(function(){window.__rodLegacy={done:true,error:'network'};});};"
+            + "if(grecaptcha.ready)grecaptcha.ready(run);else run();"
+            + "return JSON.stringify({started:true});})()";
+        JSONObject started = new JSONObject(evalJson(start));
+        if (!started.optBoolean("started", false))
+            throw new IllegalStateException(
+                "EQUATORIAL_HUMAN_VERIFICATION_REQUIRED: reCAPTCHA oficial indisponivel");
+
+        long limit = Math.min(deadline, System.currentTimeMillis() + LOGIN_WAIT_MILLIS);
+        JSONObject outcome = new JSONObject();
+        while (System.currentTimeMillis() < limit) {
+            Thread.sleep(POLL_MILLIS);
+            outcome = new JSONObject(evalJson(
+                "JSON.stringify(window.__rodLegacy||{done:false})"));
+            if (outcome.optBoolean("done", false)) break;
+        }
+        evalJson("(function(){window.__rodLegacy=null;return '';})()");
+        if (!outcome.optBoolean("done", false))
+            throw new IllegalStateException(
+                "EQUATORIAL_PORTAL_TIMEOUT: consulta de contratos do titular nao concluiu");
+        RodLog.step("contratos", "desafio oficial HTTP=" + outcome.optInt("http", 0)
+            + " autenticado=" + outcome.optBoolean("authenticated", false));
+        if (!outcome.optBoolean("authenticated", false))
+            throw new IllegalStateException(
+                "EQUATORIAL_AUTH_REQUIRED: canal oficial recusou CPF ou data de nascimento");
+
+        String mapped = EquatorialContractMapper.resolve(
+            outcome.optString("accounts", "[]"), legacy, knownUnits);
+        if (mapped.isEmpty())
+            throw new IllegalStateException(
+                "EQUATORIAL_CONTRACT_NOT_FOUND: lista oficial nao resolveu a UC legada sem ambiguidade");
+        RodLog.step("contratos", "UC legada reconciliada pela lista oficial do titular");
+        return mapped;
+    }
+
+    private static String accountsArray(String body) {
+        try {
+            String trimmed = body == null ? "" : body.trim();
+            if (trimmed.startsWith("[")) return trimmed;
+            JSONObject object = new JSONObject(trimmed);
+            JSONArray accounts = object.optJSONArray("contas");
+            if (accounts == null) accounts = object.optJSONArray("ContasContrato");
+            return accounts == null ? "[]" : accounts.toString();
+        } catch (Exception ignored) {
+            return "[]";
+        }
+    }
+
+    private HttpResult getOfficialCustomerAccounts(String document, String jwt) throws Exception {
+        return officialGet(GO_APP_BFF + GO_CUSTOMER_ACCOUNTS_PATH + document + "/contas", jwt);
+    }
+
+    private HttpResult getOfficialInstallation(String unit, String jwt) throws Exception {
+        return officialGet(GO_APP_BFF + GO_INSTALLATION_PATH + unit, jwt);
+    }
+
+    private HttpResult officialGet(String address, String jwt) throws Exception {
+        URL url = new URL(address);
+        HttpURLConnection connection = (HttpURLConnection) url.openConnection();
+        connection.setRequestMethod("GET");
+        connection.setConnectTimeout(BFF_TIMEOUT_MILLIS);
+        connection.setReadTimeout(BFF_TIMEOUT_MILLIS);
+        connection.setRequestProperty("Authorization", "Bearer " + jwt);
+        connection.setRequestProperty("User-Agent", "Equatorial Energia/4.10.5 Android");
+        connection.setRequestProperty("X-Platform", "Android");
+        connection.setRequestProperty("cache-control", "no-cache");
+        connection.setRequestProperty("Accept", "application/json");
+        int status = connection.getResponseCode();
+        InputStream stream = status >= 200 && status < 400
+            ? connection.getInputStream() : connection.getErrorStream();
+        String body = readLimited(stream, 1_000_000);
+        connection.disconnect();
+        return new HttpResult(status, body);
+    }
+
     private JSONObject runDebts(Context context, String unit, String document, long deadline)
             throws Exception {
         create(context);
@@ -556,7 +759,32 @@ final class EquatorialWebEngine {
         JSONObject result = new JSONObject()
             .put("go_outcome", outcome.name())
             .put("read_provider", AgenciaWebLogin.ReadProvider.READ_PROVIDER_UNAVAILABLE.name());
-        if (outcome != AgenciaWebLogin.GoOutcome.GO_LOGIN_OK) return result;
+        if (outcome != AgenciaWebLogin.GoOutcome.GO_LOGIN_OK) {
+            if (outcome == AgenciaWebLogin.GoOutcome.GO_LOGIN_REJECTED)
+                throw new IllegalStateException(
+                    "EQUATORIAL_AUTH_REQUIRED: a Agencia Web recusou o acesso da unidade");
+            throw new IllegalStateException(
+                "EQUATORIAL_PORTAL_TIMEOUT: a Agencia Web nao concluiu o login (" + outcome + ")");
+        }
+
+        // O portal institucional e o app oficial compartilham o JWT. Em vez de
+        // tentar saltar para o ASPX legado (a ponte que já provamos fechada), use
+        // exatamente a API de leitura do aplicativo oficial. É GET, não cria
+        // pagamento e não altera nenhum estado da conta.
+        try {
+            JSONObject official = readOfficialAppBills(unit, deadline);
+            official.put("go_outcome", outcome.name())
+                .put("read_provider", AgenciaWebLogin.ReadProvider.READ_PROVIDER_OK.name())
+                .put("official_app_api", true);
+            return official;
+        } catch (IllegalStateException error) {
+            // Um endpoint temporariamente indisponível não apaga o canal de
+            // leitura do próprio site. Mantemos o funil já existente como última
+            // alternativa, mas nunca escondemos uma recusa de autenticação.
+            String message = error.getMessage() == null ? "" : error.getMessage();
+            if (message.contains("EQUATORIAL_AUTH_REQUIRED")) throw error;
+            RodLog.fail("appapi", "BFF oficial indisponivel; tentando funil web");
+        }
 
         // Navegação de usuário: a área logada primeiro, e de lá o link visível do
         // funil. Carregar a rota direto daria o mesmo endereço, mas não provaria
@@ -673,6 +901,180 @@ final class EquatorialWebEngine {
             + " linhas de tabela=" + changed.optInt("rows", 0));
         RodLog.step("consulta", "rede da pagina: " + RodLog.sanitize(network));
         return readDebtScreen(result, unit);
+    }
+
+    /** Consulta as faturas abertas pela mesma rota usada pelo aplicativo oficial. */
+    private JSONObject readOfficialAppBills(String unit, long deadline) throws Exception {
+        if (System.currentTimeMillis() >= deadline)
+            throw new IllegalStateException(
+                "EQUATORIAL_PORTAL_TIMEOUT: o job terminou antes da consulta no aplicativo oficial");
+        String jwt = evalJson("(function(){try{return localStorage.getItem('jwt')||'';}catch(e){return '';}})()");
+        if (jwt.isEmpty())
+            throw new IllegalStateException(
+                "EQUATORIAL_AUTH_REQUIRED: a Agencia Web nao entregou token para o aplicativo oficial");
+        try {
+            String digits = unit == null ? "" : unit.replaceAll("\\D", "");
+            if (digits.isEmpty())
+                throw new IllegalStateException(
+                    "EQUATORIAL_PROPERTY_NOT_MAPPED: unidade consumidora vazia no cofre");
+            // O site novo usa esta rota para listar faturas e o APK oficial a
+            // mantém como getBillsListAll.go. Diferentemente da rota de faturas
+            // em aberto, ela pode aceitar o JWT emitido pelo login UC+CPF.
+            HttpResult debts = getOfficialDebts(digits, jwt);
+            if (debts.status == 404) {
+                String padded = AgenciaWebLogin.unit(digits);
+                if (!padded.equals(digits)) debts = getOfficialDebts(padded, jwt);
+            }
+            RodLog.step("siteapi", "resposta HTTP=" + debts.status);
+            if (debts.status == 200) return parseOfficialDebts(debts.body);
+
+            HttpResult response = getOfficialBills(digits, jwt);
+            // A grafia de quinze dígitos é a mesma UC, com zeros à esquerda. O
+            // backend antigo usa uma ou outra conforme a origem do cadastro.
+            if (response.status == 404) {
+                String padded = AgenciaWebLogin.unit(digits);
+                if (!padded.equals(digits)) response = getOfficialBills(padded, jwt);
+            }
+            RodLog.step("appapi", "resposta HTTP=" + response.status);
+            if (response.status == 401 || response.status == 403)
+                throw new IllegalStateException(
+                    "EQUATORIAL_AUTH_REQUIRED: o BFF oficial recusou a sessao da Agencia Web");
+            if (response.status == 404)
+                throw new IllegalStateException(
+                    "EQUATORIAL_CONTRACT_NOT_FOUND: o aplicativo oficial nao encontrou a unidade");
+            if (response.status != 200)
+                throw new IllegalStateException(
+                    "EQUATORIAL_PORTAL_TIMEOUT: o BFF oficial respondeu HTTP " + response.status);
+            return parseOfficialBills(response.body);
+        } finally {
+            // Reduz a janela em que a credencial portadora fica referenciada.
+            jwt = "";
+        }
+    }
+
+    private HttpResult getOfficialBills(String unit, String jwt) throws Exception {
+        URL url = new URL(GO_APP_BFF + GO_OPEN_BILLS_PATH + unit);
+        HttpURLConnection connection = (HttpURLConnection) url.openConnection();
+        connection.setRequestMethod("GET");
+        connection.setConnectTimeout(BFF_TIMEOUT_MILLIS);
+        connection.setReadTimeout(BFF_TIMEOUT_MILLIS);
+        connection.setRequestProperty("Authorization", "Bearer " + jwt);
+        connection.setRequestProperty("User-Agent", "Equatorial Energia/4.10.5 Android");
+        connection.setRequestProperty("X-Platform", "Android");
+        connection.setRequestProperty("cache-control", "no-cache");
+        connection.setRequestProperty("Accept", "application/json");
+        int status = connection.getResponseCode();
+        InputStream stream = status >= 200 && status < 400
+            ? connection.getInputStream() : connection.getErrorStream();
+        String body = readLimited(stream, 1_000_000);
+        connection.disconnect();
+        return new HttpResult(status, body);
+    }
+
+    private HttpResult getOfficialDebts(String unit, String jwt) throws Exception {
+        URL url = new URL(GO_APP_BFF + GO_DEBTS_PATH + unit + "?listarEmAberto=false");
+        HttpURLConnection connection = (HttpURLConnection) url.openConnection();
+        connection.setRequestMethod("GET");
+        connection.setConnectTimeout(BFF_TIMEOUT_MILLIS);
+        connection.setReadTimeout(BFF_TIMEOUT_MILLIS);
+        connection.setRequestProperty("Authorization", "Bearer " + jwt);
+        connection.setRequestProperty("User-Agent", "Equatorial Energia/4.10.5 Android");
+        connection.setRequestProperty("X-Platform", "Android");
+        connection.setRequestProperty("cache-control", "no-cache");
+        connection.setRequestProperty("Accept", "application/json");
+        int status = connection.getResponseCode();
+        InputStream stream = status >= 200 && status < 400
+            ? connection.getInputStream() : connection.getErrorStream();
+        String body = readLimited(stream, 1_000_000);
+        connection.disconnect();
+        return new HttpResult(status, body);
+    }
+
+    /** Lê uma resposta limitada; página de erro nunca pode consumir a RAM do Poco. */
+    private static String readLimited(InputStream stream, int limit) throws Exception {
+        if (stream == null) return "";
+        StringBuilder out = new StringBuilder();
+        try (BufferedReader reader = new BufferedReader(
+                new InputStreamReader(stream, StandardCharsets.UTF_8))) {
+            char[] buffer = new char[4096];
+            int read;
+            while ((read = reader.read(buffer)) >= 0) {
+                if (out.length() + read > limit)
+                    throw new IllegalStateException(
+                        "EQUATORIAL_PORTAL_TIMEOUT: resposta do BFF oficial excedeu o limite");
+                out.append(buffer, 0, read);
+            }
+        }
+        return out.toString();
+    }
+
+    /**
+     * Converte a lista do app no contrato compacto que o Telegram já entende.
+     * Mantém todas as faturas em ``bills`` e promove a primeira para os campos
+     * principais. A API oficial ordena a mesma lista que apresenta na tela.
+     */
+    static JSONObject parseOfficialBills(String body) throws Exception {
+        JSONArray source = new JSONArray(body == null || body.trim().isEmpty() ? "[]" : body);
+        JSONArray bills = new JSONArray();
+        for (int i = 0; i < source.length(); i++) {
+            JSONObject raw = source.optJSONObject(i);
+            if (raw == null) continue;
+            JSONObject bill = new JSONObject()
+                .put("reference", first(raw, "mesReferencia", "competencia", "numeroFaturaVencida"))
+                .put("amount", first(raw, "valorFatura", "valor"))
+                .put("due_date", first(raw, "dataVencimento"));
+            bills.put(bill);
+        }
+        JSONObject result = new JSONObject()
+            .put("bills", bills)
+            .put("bill_count", bills.length())
+            .put("read_only", true)
+            .put("barcode_present", false)
+            .put("pix_present", false);
+        if (bills.length() == 0) {
+            return result.put("no_open_bills", true)
+                .put("debt_notice", "nenhuma fatura em aberto")
+                .put("amount", "").put("reference", "").put("due_date", "");
+        }
+        JSONObject first = bills.getJSONObject(0);
+        return result.put("no_open_bills", false)
+            .put("amount", first.optString("amount", ""))
+            .put("reference", first.optString("reference", ""))
+            .put("due_date", first.optString("due_date", ""));
+    }
+
+    /** Converte o envelope data.faturas usado pela rota /api/v1/debitos. */
+    static JSONObject parseOfficialDebts(String body) throws Exception {
+        JSONObject envelope = new JSONObject(
+            body == null || body.trim().isEmpty() ? "{}" : body);
+        JSONObject data = envelope.optJSONObject("data");
+        JSONArray source = data == null ? null : data.optJSONArray("faturas");
+        if (source == null) source = new JSONArray();
+        JSONArray normalized = new JSONArray();
+        for (int i = 0; i < source.length(); i++) {
+            JSONObject raw = source.optJSONObject(i);
+            if (raw == null) continue;
+            normalized.put(new JSONObject()
+                .put("mesReferencia", first(raw, "competencia", "mesReferencia", "numeroFaturaVencida"))
+                .put("valorFatura", first(raw, "valor", "valorFatura"))
+                .put("dataVencimento", first(raw, "dataVencimento", "vencimento")));
+        }
+        return parseOfficialBills(normalized.toString());
+    }
+
+    private static String first(JSONObject object, String... keys) {
+        for (String key : keys) {
+            Object value = object.opt(key);
+            if (value != null && value != JSONObject.NULL && !String.valueOf(value).trim().isEmpty())
+                return String.valueOf(value).trim();
+        }
+        return "";
+    }
+
+    private static final class HttpResult {
+        final int status;
+        final String body;
+        HttpResult(int status, String body) { this.status = status; this.body = body; }
     }
 
     /**

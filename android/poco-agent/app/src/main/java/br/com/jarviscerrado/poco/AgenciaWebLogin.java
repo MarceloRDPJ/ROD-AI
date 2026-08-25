@@ -158,6 +158,12 @@ final class AgenciaWebLogin {
     static String unit(String raw) {
         String digits = raw == null ? "" : raw.replaceAll("\\D", "");
         if (digits.isEmpty()) return "";
+        // Goiás ainda aceita durante a migração o identificador legado de até
+        // oito dígitos. O auth-go.js envia o campo exatamente como digitado;
+        // transformar uma UC antiga em 15 dígitos muda o identificador e o
+        // backend recusa CPF+UC. Os números novos intermediários continuam
+        // recebendo o zero à esquerda exigido pelo formato nacional.
+        if (digits.length() <= 8) return digits;
         if (digits.length() >= UNIT_LENGTH) return digits;
         StringBuilder padded = new StringBuilder(UNIT_LENGTH);
         for (int i = digits.length(); i < UNIT_LENGTH; i++) padded.append('0');
@@ -269,9 +275,10 @@ final class AgenciaWebLogin {
         // Só a forma mais curta de cada família: "nao ha debitos" nunca casaria,
         // porque "nao ha debito" já é prefixo dele e vence primeiro.
         "nao ha debito", "nenhum debito", "sem debito",
-        "nao possui debito", "nenhuma fatura", "nenhuma conta", "em dia",
+        "nao possui debito", "nenhuma fatura", "nenhuma conta",
+        "sua conta esta em dia", "conta esta em dia",
         "nao foram encontrados", "nao encontramos", "nenhum registro",
-        "nada consta", "adimplente", "quitad"
+        "nada consta", "adimplente", "fatura quitada", "conta quitada"
     };
 
     /** Qual frase de "sem débito" o texto contém. Devolve a palavra, não o texto. */
@@ -490,7 +497,8 @@ final class AgenciaWebLogin {
      * real. Conferir antes é o que mantém o diagnóstico honesto.
      */
     static boolean ready(String documentValue, String unitValue) {
+        String normalizedUnit = unit(unitValue);
         return document(documentValue).length() >= 11
-            && unit(unitValue).length() == UNIT_LENGTH;
+            && (normalizedUnit.length() == 8 || normalizedUnit.length() >= UNIT_LENGTH);
     }
 }

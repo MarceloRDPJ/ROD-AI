@@ -33,9 +33,9 @@ mensurável.
 
 Na Equatorial, a reaparição do formulário depois do envio, sem mensagem de
 recusa, é um reload transitório. O ROD preenche novamente os dados do cofre em
-no máximo quatro reaparições. Recusa explícita e verificação humana continuam
-terminais. Não se usa solucionador de CAPTCHA, token fabricado, bypass de SMS ou
-biblioteca WhatsApp não oficial.
+no máximo quatro reaparições. Recusa explícita e verificação humana encerram esse
+canal e a cadeia segue para a Clara oficial no WhatsApp. Não se usa solucionador
+de CAPTCHA, token fabricado, bypass de SMS ou biblioteca WhatsApp não oficial.
 
 ## Responsabilidades
 
@@ -104,10 +104,12 @@ sessão e as credenciais permanecem no Android. Login, senha e contas são cifra
 com AES-GCM por uma chave não exportável do Android Keystore; o Pi não recebe
 senha, cookie, CPF, data de nascimento ou credencial.
 
-A Equatorial usa o portal oficial no Chrome do Poco. O agente preenche CPF, data
-de nascimento e unidade configurada, lê somente valor, referência e vencimento e
-descarta os demais dados. Se Imperva, CAPTCHA ou outra verificação humana aparecer,
-a tarefa encerra com diagnóstico explícito. O ROD não burla proteção antibot e
+A Equatorial tenta o portal oficial no Chrome do Poco e, quando ele é recusado,
+conversa com a Clara de Goiás pelo aplicativo oficial do WhatsApp. O Poco fica
+vinculado como aparelho adicional e não precisa de SIM. A máquina de conversa
+escolhe consulta de débitos, responde somente às perguntas reconhecidas e aceita
+valor apenas com referência ou vencimento. Se a Clara declarar ausência de débito,
+isso é registrado como resultado definitivo. O ROD não burla proteção antibot e
 jamais apresenta uma consulta simulada.
 
 O fluxo reconhece telas por `resource-id`, texto e descrição. OCR visual é
@@ -134,14 +136,23 @@ que executa jobs. Compartilhar a mesma thread fazia o Pi marcar o nó como offli
 no meio da consulta que ele mesmo havia despachado. O heartbeat carrega também
 `busy` e `pending_results`, para distinguir aparelho ocupado de aparelho ausente.
 
-O `GuardianService` observa esse heartbeat a cada 60 segundos. São necessárias
-três leituras seguidas sem sinal antes de qualquer alerta, e o alerta sai uma
-única vez por transição. A ausência de heartbeat não dispara cliques nem
-reinícios em loop: o Pi apenas avisa e espera. Quando a própria rede do Pi está
-fora, o watchdog cala, porque a causa provável já foi relatada. Nó que nunca
-enviou heartbeat não gera alerta algum — não houve queda a relatar.
+O `GuardianService` observa esse heartbeat a cada 60 segundos, mas atraso virou
+somente telemetria. Medições no aparelho real mostraram que o Android pode atrasar
+o executor mesmo com o foreground service e a fila de jobs respondendo; anunciar
+"Poco offline" nesse estado era falso. O watchdog registra atraso e recuperação
+no log, sem poluir o Telegram. Nó que nunca enviou heartbeat também não gera
+alerta — não houve queda a relatar.
 
-Durante a execução de um job o agente segura um `PARTIAL_WAKE_LOCK`, e cada
+Quando o ping do Pi falha duas vezes, o guardião enfileira `network_check` no
+Poco. Internet validada pelo Android suprime o falso alerta e aponta problema no
+caminho do Pi. O alerta de indisponibilidade é enviado somente quando os dois
+pontos negam acesso; se o Poco não responder, a mensagem declara a incerteza em
+vez de culpar o provedor. O resultado ativo fica em cache por cinco minutos para
+não transformar uma falha prolongada em jobs repetidos.
+
+O agente dedicado mantém um `PARTIAL_WAKE_LOCK` e um `WifiLock` de alto
+desempenho enquanto o serviço está ativo; ambos são liberados em `onDestroy`.
+Durante a execução de um job existe ainda um wake lock próprio, e cada
 leitor segura o wake lock de tela pelo orçamento inteiro do seu fluxo. Antes
 disso o bloqueio expirava aos 60 segundos no meio da consulta, apagando a tela e
 derrubando tanto o app quanto o OCR.
@@ -166,6 +177,8 @@ trabalha.
 | Wake lock do job no agente | 300 s | `AgentService` |
 | Wake lock de tela Saneago | 240 s | `SaneagoReader` |
 | Wake lock de tela Equatorial | 180 s | `EquatorialReader` |
+| Conversa Clara no Android | 125 s | `JarvisAccessibilityService` |
+| Espera do leitor Clara | 140 s | `ClaraWhatsAppReader` |
 | Ida e volta na ponte de acessibilidade | 25 s / 30 s | leitores |
 | Polling saudável | 15 s | `AgentService` |
 
@@ -229,12 +242,13 @@ token, código de barras ou conteúdo integral de faturas por padrão.
 Implementado: inventário, agente Android, Keystore, heartbeat em thread própria,
 fila persistente no Pi, fila local SQLite no aparelho, reentrega por lease com
 deduplicação por `job_id`, backoff com jitter, watchdog no `GuardianService`,
-status/bateria/temperatura, validação real de internet, painel RDP, cofre das oito
-unidades, login assistido Saneago, leitura Saneago, fluxo Equatorial via Chrome,
-cache de faturas rotulado e intents por imóvel.
+status/bateria/temperatura, validação real de internet, painel RDP, cofre das contas,
+login assistido Saneago, leitura Saneago, fluxo Equatorial via Chrome, instalação e
+pareamento assistidos do WhatsApp, canal Clara e cache de faturas rotulado.
 
 As ações aceitas são exatamente `device_status`, `network_check`,
-`read_bill_cache`, `refresh_saneago_bills` e `refresh_equatorial_bills`.
+`read_bill_cache`, `refresh_saneago_bills`, `refresh_equatorial_bills`,
+`clara_equatorial_bills`, `get_equatorial_pix` e `get_equatorial_boleto`.
 `network_speed` e `scan_document` foram retiradas da lista: o Pi as enfileirava e
 o aparelho só as recusava depois do timeout inteiro. Voltam quando existirem de
 fato no agente.

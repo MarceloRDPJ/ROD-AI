@@ -83,6 +83,11 @@ jarvis/
 - módulos não devem depender de Telegram para sua lógica central.
 - persistência crítica deve usar `Persistence`, não arquivos soltos.
 - respostas desconhecidas não podem chamar LLM nem fingir capacidade.
+- `equatorial_providers.py` escolhe canais; web, Clara e cache têm estados de saúde
+  separados e nenhum canal pode transformar cache em leitura atual.
+- `ClaraConversation.java` decide o diálogo oficial sem IA generativa;
+  `ClaraWhatsAppReader.java` lê o cofre em memória e a acessibilidade executa apenas
+  consulta, nunca pagamento.
 
 ## Arquivos legados
 

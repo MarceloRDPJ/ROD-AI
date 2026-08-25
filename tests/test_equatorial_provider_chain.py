@@ -9,7 +9,7 @@ O que está sob prova aqui, em ordem de gravidade:
 
 1. cache NUNCA vira Pix ou boleto — leitura antiga apresentada como cobrança de
    agora é o erro caro desta tela, porque quem paga não tem como perceber;
-2. canal que não existe no aparelho é pulado sem gastar espera do dono;
+2. canal sem requisito é pulado, enquanto a Clara vinculada participa da cadeia;
 3. recusa estrutural não é repetida 30 s depois, e o canal preferido volta sozinho
    quando o prazo passa;
 4. nenhum nome de canal interno chega à tela do Telegram.
@@ -45,8 +45,8 @@ FAKE_UC = "UC-99999999"
 
 ACTIONS = {spec.name: spec.action for spec in DEFAULT_CHAIN}
 EVERYTHING_WIRED = frozenset(spec.action for spec in DEFAULT_CHAIN)
-# A fila real de hoje: sessão web e cache. Os canais novos ainda não existem nela.
-WIRED_TODAY = frozenset({ACTIONS[WEB_SESSION], ACTIONS[CACHE]})
+# A fila real de hoje: sessão web, Clara oficial e cache.
+WIRED_TODAY = frozenset({ACTIONS[WEB_SESSION], ACTIONS[CLARA_WHATSAPP], ACTIONS[CACHE]})
 
 
 def wire(code, detail="detalhe tecnico"):
@@ -160,7 +160,7 @@ async def test_a_channel_is_attempted_at_most_once_per_query():
     await chain.read("casa", runner)
 
     assert sorted(runner.actions()) == sorted(set(runner.actions()))
-    assert not runner.tried(CLARA_WHATSAPP)  # requisito ausente: nem uma vez
+    assert runner.tried(CLARA_WHATSAPP)
 
 
 # =====================================================
@@ -393,35 +393,38 @@ async def test_an_action_absent_from_the_poco_queue_is_skipped_without_a_job():
     runner = Runner(
         {
             ACTIONS[WEB_SESSION]: (None, wire("EQUATORIAL_LOGIN_FAILED")),
+            ACTIONS[CLARA_WHATSAPP]: (None, wire("EQUATORIAL_PORTAL_TIMEOUT")),
             ACTIONS[CACHE]: (cache_result(), None),
         }
     )
 
     outcome = await chain.read("casa", runner)
 
-    assert runner.actions() == [ACTIONS[WEB_SESSION], ACTIONS[CACHE]]
+    assert runner.actions() == [
+        ACTIONS[WEB_SESSION], ACTIONS[CLARA_WHATSAPP], ACTIONS[CACHE]
+    ]
     assert outcome.provider == CACHE
 
 
 @pytest.mark.asyncio
-async def test_whatsapp_absent_from_the_device_is_never_attempted_and_never_cooled():
-    """Requisito ausente não é falha: não se retenta e não se promete retomada.
-
-    O WhatsApp nunca foi instalado neste Poco, então a Clara não pode consumir um
-    segundo da espera do dono — mesmo com a ação declarada na fila.
-    """
-    chain = build_chain()
+async def test_linked_whatsapp_is_the_live_fallback_after_web_failure():
+    """A Clara oficial atende quando a sessão web é recusada pelo antifraude."""
+    chain = build_chain(registry=WIRED_TODAY)
     runner = Runner(
-        {action: (None, wire("EQUATORIAL_PORTAL_TIMEOUT")) for action in EVERYTHING_WIRED}
+        {
+            ACTIONS[WEB_SESSION]: (None, wire("EQUATORIAL_LOGIN_FAILED")),
+            ACTIONS[CLARA_WHATSAPP]: (bill_result(), None),
+        }
     )
 
-    await chain.read("casa", runner)
+    outcome = await chain.read("casa", runner)
 
-    assert not runner.tried(CLARA_WHATSAPP)
+    assert runner.tried(CLARA_WHATSAPP)
+    assert outcome.provider == CLARA_WHATSAPP
+    assert outcome.ok
     snapshot = chain.describe()[CLARA_WHATSAPP]
-    assert snapshot["available"] is False
-    assert snapshot["missing_requirement"]
-    assert snapshot["cooling_for_seconds"] == 0  # cooldown prometeria uma volta
+    assert snapshot["available"] is True
+    assert not snapshot["missing_requirement"]
 
 
 @pytest.mark.asyncio

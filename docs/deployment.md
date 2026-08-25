@@ -88,6 +88,12 @@ batata com banana?
 
 As primeiras mensagens devem cair nas skills corretas. A pergunta desconhecida deve receber esclarecimento imediato, sem log de `llama-server`, espera de 12 segundos ou resposta inventada.
 
+Para validar o nó de contas, confirme no Poco que o pacote oficial `com.whatsapp`
+está instalado, o serviço **ROD — automação local** está ativo e o WhatsApp está
+vinculado como aparelho adicional. Depois consulte, pelo nome, cada imóvel de
+energia configurado. O resultado precisa indicar leitura ao vivo ou “sem débitos”;
+cache não conta como validação do canal Clara.
+
 ## Git e dados locais
 
 Antes de atualizar, `git status --short` deve ser inspecionado. Diretórios `env`, `es`, `models/`, bancos e storage do Pi podem ser dados locais; não apagar ou incluir no Git automaticamente.

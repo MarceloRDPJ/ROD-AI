@@ -79,8 +79,14 @@ final class EquatorialTextParser {
 
     private static final Pattern DUE_DATE =
         Pattern.compile("(?i)(?:vencimento|vence em|venc\\.)\\s*:?\\s*([0-9]{2}/[0-9]{2}/[0-9]{4})");
+    private static final Pattern DATE_ANY =
+        Pattern.compile("\\b([0-9]{2}/[0-9]{2}/[0-9]{4})\\b");
     private static final Pattern REFERENCE =
         Pattern.compile("(?i)(?:refer.ncia|m.s de refer.ncia|compet.ncia)\\s*:?\\s*([0-9]{2}/[0-9]{4})");
+
+    /** O checkout oficial da Bemobi identifica a cobrança como "Fatura MM/AAAA". */
+    private static final Pattern REFERENCE_INVOICE =
+        Pattern.compile("(?i)\\bfatura\\s*:?[ \\t]*([0-9]{2}/[0-9]{4})\\b");
 
     /**
      * Referência com o mês abreviado, como JUL/2026.
@@ -128,7 +134,7 @@ final class EquatorialTextParser {
 
         Map<String, String> fields = new LinkedHashMap<>();
         fields.put("amount", amount(text));
-        fields.put("due_date", capture(text, DUE_DATE));
+        fields.put("due_date", dueDate(text));
         fields.put("reference", reference(text));
         fields.put("barcode", digitableLine(text));
         fields.put("pix", capture(text, PIX));
@@ -167,12 +173,31 @@ final class EquatorialTextParser {
     private static String reference(String text) {
         String rotulada = capture(text, REFERENCE);
         if (!rotulada.isEmpty()) return rotulada;
+        String fatura = capture(text, REFERENCE_INVOICE);
+        if (!fatura.isEmpty()) return fatura;
         Matcher matcher = REFERENCE_MONTH_NAME.matcher(text);
         if (!matcher.find()) return "";
         String mes = matcher.group(1).toUpperCase();
         for (int i = 0; i < MONTHS.length; i++)
             if (MONTHS[i].equals(mes)) return String.format("%02d/%s", i + 1, matcher.group(2));
         return "";
+    }
+
+    /**
+     * A tabela responsiva da Bemobi expõe primeiro todos os cabeçalhos e depois
+     * os valores da linha; por isso VENC. e a data não ficam adjacentes na árvore
+     * de acessibilidade. Só usamos a data solta quando há cabeçalho de vencimento
+     * e exatamente uma data completa na tela — duas datas seriam ambíguas.
+     */
+    private static String dueDate(String text) {
+        String labeled = capture(text, DUE_DATE);
+        if (!labeled.isEmpty()) return labeled;
+        String lower = text.toLowerCase();
+        if (!lower.contains("venc.") && !lower.contains("vencimento")) return "";
+        Set<String> distinct = new LinkedHashSet<>();
+        Matcher matcher = DATE_ANY.matcher(text);
+        while (matcher.find()) distinct.add(matcher.group(1));
+        return distinct.size() == 1 ? distinct.iterator().next() : "";
     }
 
     /** A linha digitável circula com pontos, espaços e hifens; guardamos só os dígitos. */

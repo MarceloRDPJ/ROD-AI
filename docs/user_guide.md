@@ -25,7 +25,7 @@ Na Equatorial, **ATUALIZAR** força uma nova tentativa. Se o formulário oficial
 recarregar silenciosamente, o Poco o preenche outra vez dentro de um limite. Um
 CAPTCHA, bloqueio antifraude ou recusa de cadastro é reportado sem contorno.
 
-O APK 1.0.5 usa a identidade escura da RDP Studio e controles com área de toque,
+O APK 1.0.35 usa a identidade escura da RDP Studio e controles com área de toque,
 feedback visual e hierarquia operacional. A versão instalada aparece no rodapé.
 
 ## Menus e botões
@@ -98,7 +98,16 @@ O status consulta CPU, RAM, disco, temperatura e uptime reais. O Pi não possui 
 - `ligar o pc`
 - `pc ta ligado?`
 
-O speedtest é uma operação real e pode demorar. O scan depende da visibilidade da rede local.
+`status da internet` consulta em paralelo o ping externo do Pi e a validação de
+internet do Android no Poco. `speed` mede download/upload no Pi e também pede ao
+Poco uma validação independente pelo Wi-Fi; a resposta deixa explícito onde cada
+dado foi medido. O speedtest pode demorar. O scan depende da visibilidade da rede
+local.
+
+Heartbeat atrasado não significa que o Poco desligou: o Android pode adiar uma
+thread em repouso. Por isso o ROD não envia mais alerta de queda baseado apenas
+no heartbeat. Uma tarefa ativa `network_check` é a prova usada nas consultas e
+na confirmação de falha da internet.
 
 ### AdGuard e segurança
 
@@ -150,9 +159,16 @@ oficial no Chrome, escolhe a unidade e lê os dados exibidos. Se uma unidade nã
 estiver vinculada ao login, ele informa isso e interrompe a consulta; nunca reutiliza
 o resultado da unidade anterior.
 
-Saneago usa o app oficial. Equatorial usa o portal oficial no Chrome. Se surgir
-CAPTCHA, Imperva ou confirmação humana, resolva a tela no Poco e repita o comando.
-O ROD não contorna a proteção e não inventa valor de fatura.
+Saneago usa o app oficial. A Equatorial possui uma cadeia de canais oficiais: sessão
+web no Chrome, Clara no WhatsApp e, por último, a última leitura identificada como
+cache. A Clara de Goiás consulta débitos e segunda via inclusive quando o imóvel não
+está no nome do usuário do Telegram. O WhatsApp do Poco é um aparelho adicional:
+não exige chip no Poco, mas exige um pareamento inicial por QR com a conta principal.
+
+Se surgir CAPTCHA, Imperva ou confirmação humana, o ROD muda para o próximo canal;
+ele não contorna a proteção e não inventa valor. Na Clara, a automação conversa
+somente com o contato oficial, envia no máximo duas vezes cada dado quando a própria
+conversa recarrega a pergunta e encerra sem executar pagamento.
 
 A consulta dirige o aplicativo de ponta a ponta e pode levar alguns minutos,
 principalmente quando a sessão precisa ser refeita. O ROD abre **uma** mensagem
@@ -166,6 +182,11 @@ botão é tocado. PIX responde com o código copia e cola em bloco, para copiar 
 um toque; BOLETO responde com o PDF oficial, com nome amigável, e o arquivo
 temporário é apagado do Pi depois do envio. **Nenhum dos dois inicia pagamento**, e
 o ROD nunca envia link de pagamento.
+
+O canal da Clara confirma situação, referência, vencimento e valor quando esses
+campos aparecem juntos. Uma resposta explícita de “sem débitos” também é resultado
+válido. Pix e boleto só ficam disponíveis quando a leitura ao vivo trouxe um
+artefato verificável; a automação nunca reaproveita um código antigo do cache.
 
 Tocar duas vezes no mesmo botão não dispara duas automações: o segundo toque
 espera (ou reaproveita) a operação que já está em andamento. Nunca há duas

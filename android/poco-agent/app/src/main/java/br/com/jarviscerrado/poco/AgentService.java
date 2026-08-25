@@ -9,6 +9,7 @@ import android.content.Intent;
 import android.content.IntentFilter;
 import android.net.ConnectivityManager;
 import android.net.NetworkCapabilities;
+import android.net.wifi.WifiManager;
 import android.os.BatteryManager;
 import android.os.IBinder;
 import android.os.PowerManager;
@@ -32,6 +33,8 @@ public class AgentService extends Service {
     private ScheduledExecutorService jobExecutor;
     private JobOutbox outbox;
     private PowerManager.WakeLock jobWakeLock;
+    private PowerManager.WakeLock serviceWakeLock;
+    private WifiManager.WifiLock wifiLock;
     private final Random jitter = new Random();
     private volatile int failureStreak;
     private volatile boolean busy;
@@ -68,6 +71,14 @@ public class AgentService extends Service {
         jobWakeLock = getSystemService(PowerManager.class)
             .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "rod:poco-job");
         jobWakeLock.setReferenceCounted(false);
+        serviceWakeLock = getSystemService(PowerManager.class)
+            .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "rod:poco-agent");
+        serviceWakeLock.setReferenceCounted(false);
+        serviceWakeLock.acquire();
+        WifiManager wifi = (WifiManager) getApplicationContext().getSystemService(Context.WIFI_SERVICE);
+        wifiLock = wifi.createWifiLock(WifiManager.WIFI_MODE_FULL_HIGH_PERF, "rod:poco-wifi");
+        wifiLock.setReferenceCounted(false);
+        wifiLock.acquire();
 
         heartbeatExecutor = Executors.newSingleThreadScheduledExecutor();
         heartbeatExecutor.scheduleWithFixedDelay(this::heartbeatCycle, 2, HEARTBEAT_SECONDS, TimeUnit.SECONDS);
@@ -159,6 +170,8 @@ public class AgentService extends Service {
         if (action.equals("network_check")) return networkCheck();
         if (action.equals("refresh_saneago_bills")) return cached("saneago", property, SaneagoReader.readCurrent(this, property));
         if (action.equals("refresh_equatorial_bills")) return cached("equatorial", property, EquatorialReader.read(this, property));
+        if (action.equals("clara_equatorial_bills")) return cached("equatorial", property, ClaraWhatsAppReader.read(this, property));
+        if (action.equals("prepare_clara_whatsapp")) return WhatsAppSetup.prepare(this);
         // Artefatos sob demanda de uma fatura em aberto. Nenhum dos dois paga,
         // confirma ou movimenta nada; e o proprietario quem decide o que fazer com
         // o Pix e com o PDF. Nada disso entra no BillCache: cache guarda leitura,
@@ -250,6 +263,8 @@ public class AgentService extends Service {
         if (heartbeatExecutor != null) heartbeatExecutor.shutdownNow();
         if (jobExecutor != null) jobExecutor.shutdownNow();
         if (jobWakeLock != null && jobWakeLock.isHeld()) jobWakeLock.release();
+        if (serviceWakeLock != null && serviceWakeLock.isHeld()) serviceWakeLock.release();
+        if (wifiLock != null && wifiLock.isHeld()) wifiLock.release();
         if (outbox != null) outbox.close();
         super.onDestroy();
     }

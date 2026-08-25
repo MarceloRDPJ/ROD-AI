@@ -27,6 +27,14 @@ O SSD oferece espaço e reduz a dependência de microSD, mas não aumenta CPU ou
 
 Não presumir GPIO, fan, UPS ou sensores externos. Funcionalidades relacionadas só podem afirmar disponibilidade depois de consultar hardware ou serviço real.
 
+### Poco X3 NFC
+
+- nó Android dedicado, com 6 GB de RAM, conectado ao Pi por Wi-Fi;
+- credenciais e identificadores ficam cifrados no Android Keystore;
+- executa RPA somente leitura nos aplicativos/canais oficiais;
+- WhatsApp oficial funciona como aparelho adicional, sem SIM no Poco;
+- USB/ADB é manutenção, não transporte de produção.
+
 ## Arquitetura de rede
 
 ```text
@@ -40,6 +48,11 @@ Modem/roteador doméstico (NAT, DHCP e firewall)
    |     +-- rod_cerrado
    |
    +-- computadores, celulares e dispositivos domésticos
+   +-- Poco X3 NFC
+         +-- agente ROD (HMAC + fila de jobs)
+         +-- Saneago oficial
+         +-- Chrome / Equatorial oficial
+         +-- WhatsApp / Clara oficial de Goiás
 
 Telegram Bot API <--- conexão HTTPS iniciada pelo ROD (long polling)
 GitHub          <--- fetch/push HTTPS para atualização de código
@@ -98,6 +111,8 @@ Nenhuma etapa do atendimento chama `llama.cpp`, modelo GGUF ou API paga de IA.
 - `network_scan`: consulta a LAN usando ferramentas do sistema.
 - lembretes e hidratação: leem e gravam SQLite.
 - informações atuais: usam ferramentas públicas leves configuradas e retornam erro claro se a fonte falhar.
+- contas Equatorial: cadeia `web_session → clara_whatsapp → cache`, sempre com
+  origem e idade explícitas; o cache nunca libera pagamento.
 
 Respostas técnicas podem ser compactas, por exemplo: `CPU: 12%, RAM: 43%, Temp: 48 °C.` Humanização é aplicada no texto ao redor, sem alterar números nem inventar diagnóstico.
 
@@ -141,6 +156,8 @@ Não existe backend de nuvem do ROD. Serviços externos usados são clientes out
 - Telegram Bot API: transporte das mensagens.
 - GitHub: origem e histórico do código.
 - fontes públicas opcionais: cotação, RSS e páginas configuradas.
+- WhatsApp/Clara: canal oficial outbound da Equatorial; não é backend do ROD nem
+  API não oficial.
 
 Ausências deliberadas: OpenAI, Gemini, Groq, Tuya e LLM local no atendimento.
 

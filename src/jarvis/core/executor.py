@@ -609,10 +609,14 @@ class Executor:
         # Removed old menu handlers that delegated to _build_menu
 
         if intent == "network_speed":
-            await self.app.bot.send_message(chat_id=chat_id, text="🚀 Iniciando teste de velocidade... segura a onda que demora uns segundos.")
-            return await NetworkModule.run_speedtest()
+            await self.app.bot.send_message(
+                chat_id=chat_id,
+                text="🚀 Medindo no Pi e validando a conexão pelo Poco...",
+            )
+            return await self._combined_speedtest()
 
-        if intent == "network_status": return await NetworkModule.check_ping()
+        if intent == "network_status":
+            return await self._combined_network_status()
 
         if intent == "network_rename":
             target = params.get("target")
@@ -903,23 +907,9 @@ class Executor:
 
     @staticmethod
     async def _run_poco_job(action: str, timeout_seconds: int = 70, params: dict | None = None):
-        if not Config.POCO_NODE_ENABLED:
-            return None, "O nó Poco está desativado na configuração."
-        from jarvis.api.app import get_poco_service
+        from jarvis.services.poco_jobs import run_poco_job
 
-        service = get_poco_service()
-        if not service.status().get("online"):
-            return None, "O Poco está offline ou sem heartbeat recente."
-        job = service.enqueue(action, params=params or {}, ttl_seconds=timeout_seconds + 30)
-        deadline = time.monotonic() + timeout_seconds
-        while time.monotonic() < deadline:
-            current = service.get_job(job.job_id)
-            if current and current.status == "completed":
-                return current.result or {}, None
-            if current and current.status in {"failed", "expired"}:
-                return None, current.error or "A tarefa expirou antes de concluir."
-            await asyncio.sleep(2)
-        return None, "O Poco não concluiu a tarefa dentro do tempo esperado."
+        return await run_poco_job(action, timeout_seconds, params)
 
     @staticmethod
     def _equatorial_code(error_text: str) -> str:
@@ -989,6 +979,56 @@ class Executor:
         if result.get("wifi_connected"):
             return "Validação pelo Poco: Wi-Fi conectado, mas sem acesso à internet confirmado."
         return "Validação pelo Poco: Wi-Fi desconectado."
+
+    async def _combined_network_status(self) -> str:
+        """Validate the same internet from the Pi and Poco in parallel."""
+        pi_metrics, poco_text = await asyncio.gather(
+            NetworkModule.get_ping_metrics(),
+            self._poco_network_check(),
+        )
+        if pi_metrics.get("success"):
+            latency = pi_metrics.get("latency_ms")
+            pi_line = "Pi: online"
+            if latency is not None:
+                pi_line += f" — {latency:g} ms"
+        else:
+            pi_line = "Pi: sem resposta externa"
+
+        poco_line = (
+            poco_text.replace("Validação pelo Poco: ", "Poco: ", 1)
+            if poco_text.startswith("Validação pelo Poco: ")
+            else f"Poco: {poco_text}"
+        )
+        poco_ok = "internet confirmada" in poco_text
+        if pi_metrics.get("success") and poco_ok:
+            conclusion = "Conclusão: internet disponível nos dois pontos."
+        elif pi_metrics.get("success"):
+            conclusion = "Conclusão: o Pi está online; o ponto do Poco precisa de atenção."
+        elif poco_ok:
+            conclusion = "Conclusão: o Poco tem internet; a falha está no caminho do Pi."
+        else:
+            conclusion = "Conclusão: nenhum dos dois pontos confirmou internet agora."
+        return f"🌐 Diagnóstico da internet\n\n• {pi_line}\n• {poco_line}\n\n{conclusion}"
+
+    async def _combined_speedtest(self) -> str:
+        """Measure speed on the Pi and independently validate Android access."""
+        pi_speed, poco_text = await asyncio.gather(
+            NetworkModule.run_speedtest(),
+            self._poco_network_check(),
+        )
+        poco_line = (
+            poco_text.replace("Validação pelo Poco: ", "Poco: ", 1)
+            if poco_text.startswith("Validação pelo Poco: ")
+            else f"Poco: {poco_text}"
+        )
+        if "internet confirmada" in poco_text:
+            note = "O Poco validou o acesso; a velocidade foi medida no Pi."
+        else:
+            note = "A velocidade foi medida no Pi; o Poco não confirmou acesso neste teste."
+        return (
+            f"{pi_speed.rstrip()}\n\n📱 {poco_line}\n"
+            f"_{note}_"
+        )
 
     async def _poco_saneago_bills(self, params: dict | None = None) -> str:
         """Texto da consulta de água, sem tocar no Telegram.

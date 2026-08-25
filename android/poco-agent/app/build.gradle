@@ -20,9 +20,11 @@ android {
         // evidencia persistente da ponte. 36 / 1.0.4: espera do funil de
         // debitos baseada em mudança de etapa, não em animação do DOM. 37 /
         // 1.0.5: inventário seguro, UI operacional e recuperação limitada de
-        // recargas transitórias do formulário da Equatorial.
-        versionCode 37
-        versionName '1.0.5'
+        // recargas transitórias do formulário da Equatorial. 38 / 1.0.6: leitura
+        // estruturada pela API do app oficial usando a sessão da Agência Web.
+        // 39 / 1.0.7: fallback automático para o Chrome quando o BFF exige OTP.
+        versionCode 67
+        versionName '1.0.35'
     }
 
     buildTypes {

@@ -196,7 +196,7 @@ public class AgentAutostartTest {
         // gravar um numero que nao corresponde ao APK.
         assertEquals(versionCode(read(new File(moduleRoot(), "build.gradle"))),
             BuildConfig.VERSION_CODE);
-        assertEquals("1.0.5", BuildConfig.VERSION_NAME);
+        assertEquals("1.0.35", BuildConfig.VERSION_NAME);
     }
 
     // -------------------------------------------------- leitura dos arquivos

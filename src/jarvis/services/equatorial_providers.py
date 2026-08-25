@@ -146,12 +146,9 @@ TRANSIENT_CODES = frozenset(
     }
 )
 
-# Requisito ausente no aparelho. O caso real de hoje é o WhatsApp, que nunca foi
-# instalado no Poco (verificado por ``pm path`` e pela lista de 348 pacotes): ligar
-# a Clara exigiria instalar da Play Store e registrar o número do dono por OTP, que
-# é passo humano e não se contorna. O agente pode descobrir isso em tempo de
-# execução; quando descobre, o canal sai da fila para sempre em vez de virar
-# cooldown, porque cooldown promete uma nova tentativa que não tem como dar certo.
+# Requisito ausente no aparelho. O agente pode descobrir isso em tempo de execução;
+# quando descobre, o canal sai da fila para sempre em vez de virar cooldown, porque
+# cooldown promete uma nova tentativa que não tem como dar certo.
 REQUIREMENT_CODES = frozenset(
     {
         "EQUATORIAL_CHANNEL_NOT_INSTALLED",
@@ -286,17 +283,14 @@ DEFAULT_CHAIN: Tuple[ProviderSpec, ...] = (
         "public_payment_equatorial_bills",
         extra_params={"provider": "equatorial"},
     ),
-    # Declarada e desligada. O WhatsApp não existe neste Poco — ``pm path`` não
-    # resolve ``com.whatsapp`` nem ``com.whatsapp.w4b``, e não há resíduo em
-    # ``/data/data`` — então ligar a Clara depende de instalar o aplicativo e
-    # registrar o número por OTP, que é decisão do dono e não do ROD. Manter o
-    # canal declarado documenta a ordem pretendida; o requisito ausente garante
-    # que ele nunca consuma um segundo da espera no Telegram.
+    # WhatsApp oficial no Poco, vinculado como aparelho adicional: não precisa de
+    # SIM nem de API não oficial. A ação é somente leitura e conversa apenas com
+    # o contato público da Clara de Goiás.
     ProviderSpec(
         CLARA_WHATSAPP,
         "clara_equatorial_bills",
+        timeout_seconds=150,
         extra_params={"provider": "equatorial"},
-        missing_requirement="whatsapp_ausente_no_aparelho",
     ),
     ProviderSpec(
         OFFICIAL_APP,
@@ -641,7 +635,11 @@ class EquatorialProviderChain:
             # saber por que a consulta de agora não veio.
             reason = ""
             if informational:
-                reason = definitive or first_failure or self._remembered_reason()
+                # Uma recusa estrutural ainda em cooldown é mais útil que um
+                # tropeço transitório de um canal secundário tentado agora.
+                # Sem essa prioridade, o cache dizia apenas "ação não
+                # configurada" e escondia que a sessão oficial exigia login.
+                reason = definitive or self._remembered_reason() or first_failure
             return ChainOutcome(
                 provider=spec.name,
                 result=result or {},

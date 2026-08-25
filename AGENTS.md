@@ -30,6 +30,12 @@ Pipeline:
 5. `executor.py` executa e protege efeitos colaterais.
 6. `modules/`, `services/` e `tools/` coletam dados reais.
 
+Contas Equatorial usam uma cadeia oficial: sessão web, Clara de Goiás no WhatsApp
+e cache informativo. O WhatsApp roda no Poco como aparelho adicional, sem SIM. A
+automação deve permanecer restrita ao contato oficial, somente leitura, com limite
+de reenvio e resultado financeiro aceito apenas quando valor e referência/vencimento
+forem coerentes ou quando a concessionária declarar explicitamente ausência de débito.
+
 `llm_fallback.py` é legado fora do runtime. Não interpretar sua presença como arquitetura ativa.
 
 ## Regras de produto

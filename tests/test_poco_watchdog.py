@@ -1,8 +1,4 @@
-"""Watchdog do nó Android no GuardianService.
-
-O Poco pode sumir por queda de Wi-Fi, bateria ou reinício. O Pi precisa avisar
-uma única vez por transição e nunca reenviar comandos para o aparelho ausente.
-"""
+"""The guardian must not confuse Android sleep with a disconnected Poco."""
 
 import pytest
 
@@ -24,91 +20,95 @@ def build_guardian(monkeypatch, status, enabled=True):
         async def send_message(self, chat_id, text):
             sent.append(text)
 
-    application = type("App", (), {"bot": FakeBot()})()
-    guardian = GuardianService(application, chat_id=1)
+    guardian = GuardianService(type("App", (), {"bot": FakeBot()})(), chat_id=1)
 
     from jarvis.config import Config
-
-    monkeypatch.setattr(Config, "POCO_NODE_ENABLED", enabled, raising=False)
-
     import jarvis.api.app as api_app
 
+    monkeypatch.setattr(Config, "POCO_NODE_ENABLED", enabled, raising=False)
     monkeypatch.setattr(api_app, "get_poco_service", lambda: FakePocoService(status))
     return guardian, sent
 
 
 @pytest.mark.asyncio
-async def test_alerts_once_after_repeated_misses(monkeypatch):
+async def test_stale_heartbeat_is_telemetry_not_a_false_offline_alert(monkeypatch):
     status = {"online": False, "heartbeat": {"node_id": "poco", "received_at": 1}}
     guardian, sent = build_guardian(monkeypatch, status)
-
-    for _ in range(5):
+    for _ in range(8):
         await guardian.check_poco_node()
-
-    assert len(sent) == 1
-    assert "heartbeat" in sent[0]
-    assert guardian.poco_state == "offline"
+    assert sent == []
+    assert guardian.poco_state == "delayed"
 
 
 @pytest.mark.asyncio
-async def test_stays_quiet_before_the_third_miss(monkeypatch):
+async def test_recovery_from_delayed_heartbeat_is_silent(monkeypatch):
     status = {"online": False, "heartbeat": {"node_id": "poco", "received_at": 1}}
     guardian, sent = build_guardian(monkeypatch, status)
-
     await guardian.check_poco_node()
+    status["online"] = True
+    status["heartbeat"] = {"node_id": "poco", "received_at": 2, "pending_results": 2}
     await guardian.check_poco_node()
-
     assert sent == []
+    assert guardian.poco_state == "online"
 
 
 @pytest.mark.asyncio
 async def test_never_alerts_for_a_node_that_never_reported(monkeypatch):
-    """Sem heartbeat algum não houve queda; anunciar isso seria inventar um fato."""
     guardian, sent = build_guardian(monkeypatch, {"online": False, "heartbeat": None})
-
     for _ in range(5):
         await guardian.check_poco_node()
-
     assert sent == []
     assert guardian.poco_state == "unknown"
-
-
-@pytest.mark.asyncio
-async def test_blames_the_pi_network_instead_of_the_node(monkeypatch):
-    status = {"online": False, "heartbeat": {"node_id": "poco", "received_at": 1}}
-    guardian, sent = build_guardian(monkeypatch, status)
-    guardian.internet_state = "offline"
-
-    for _ in range(5):
-        await guardian.check_poco_node()
-
-    assert sent == []
-
-
-@pytest.mark.asyncio
-async def test_announces_recovery_once_and_reports_queued_results(monkeypatch):
-    status = {"online": False, "heartbeat": {"node_id": "poco", "received_at": 1}}
-    guardian, sent = build_guardian(monkeypatch, status)
-    for _ in range(3):
-        await guardian.check_poco_node()
-
-    status["online"] = True
-    status["heartbeat"] = {"node_id": "poco", "received_at": 2, "pending_results": 2}
-    await guardian.check_poco_node()
-    await guardian.check_poco_node()
-
-    assert len(sent) == 2
-    assert "voltou a responder" in sent[1]
-    assert "2 resultado" in sent[1]
-    assert guardian.poco_state == "online"
 
 
 @pytest.mark.asyncio
 async def test_disabled_node_is_not_monitored(monkeypatch):
     status = {"online": False, "heartbeat": {"node_id": "poco", "received_at": 1}}
     guardian, sent = build_guardian(monkeypatch, status, enabled=False)
-
     for _ in range(5):
         await guardian.check_poco_node()
-
     assert sent == []
+
+
+@pytest.mark.asyncio
+async def test_pi_ping_failure_is_suppressed_when_poco_confirms_internet(monkeypatch):
+    guardian, sent = build_guardian(
+        monkeypatch,
+        {"online": True, "heartbeat": {"node_id": "poco", "received_at": 1}},
+    )
+
+    async def pi_offline():
+        return {"success": False, "latency_ms": None}
+
+    async def poco_online():
+        return {"internet_validated": True, "wifi_connected": True}, None
+
+    monkeypatch.setattr("jarvis.services.guardian.NetworkModule.get_ping_metrics", pi_offline)
+    monkeypatch.setattr(guardian, "_active_poco_internet_probe", poco_online)
+    await guardian.check_internet_status()
+    await guardian.check_internet_status()
+    assert sent == []
+    assert guardian.internet_state == "online"
+    assert guardian.consecutive_ping_failures == 0
+
+
+@pytest.mark.asyncio
+async def test_outage_is_reported_once_when_pi_and_poco_both_fail(monkeypatch):
+    guardian, sent = build_guardian(
+        monkeypatch,
+        {"online": True, "heartbeat": {"node_id": "poco", "received_at": 1}},
+    )
+
+    async def pi_offline():
+        return {"success": False, "latency_ms": None}
+
+    async def poco_offline():
+        return {"internet_validated": False, "wifi_connected": True}, None
+
+    monkeypatch.setattr("jarvis.services.guardian.NetworkModule.get_ping_metrics", pi_offline)
+    monkeypatch.setattr(guardian, "_active_poco_internet_probe", poco_offline)
+    for _ in range(5):
+        await guardian.check_internet_status()
+    assert len(sent) == 1
+    assert "Pi nem no Poco" in sent[0]
+    assert guardian.internet_state == "offline"

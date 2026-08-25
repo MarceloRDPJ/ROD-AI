@@ -32,7 +32,7 @@ class AutomationEngine:
             {
                 "id": "auto_1",
                 "name": "Alerta Internet Down",
-                "enabled": True,
+                "enabled": False,
                 "trigger": {
                     "type": "event",
                     "event_type": "network.status_changed",
@@ -46,7 +46,7 @@ class AutomationEngine:
             {
                 "id": "auto_2",
                 "name": "Modo Noturno",
-                "enabled": True,
+                "enabled": False,
                 "trigger": {
                     "type": "time",
                     "time": "22:00"
@@ -59,7 +59,7 @@ class AutomationEngine:
             {
                 "id": "auto_3",
                 "name": "Bom Dia Automático",
-                "enabled": True,
+                "enabled": False,
                 "trigger": {
                     "type": "time",
                     "time": "07:00"
@@ -72,7 +72,7 @@ class AutomationEngine:
             {
                 "id": "auto_4",
                 "name": "Dispositivo Desconhecido",
-                "enabled": True,
+                "enabled": False,
                 "trigger": {
                     "type": "event",
                     "event_type": "network.unknown_device",
@@ -93,7 +93,7 @@ class AutomationEngine:
             {
                 "id": "auto_5",
                 "name": "Meta de Hidratação Perdida",
-                "enabled": True,
+                "enabled": False,
                 "trigger": {
                     "type": "event",
                     "event_type": "hydration.goal_missed",

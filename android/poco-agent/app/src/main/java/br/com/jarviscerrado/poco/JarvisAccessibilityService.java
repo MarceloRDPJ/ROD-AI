@@ -23,6 +23,7 @@ import android.view.accessibility.AccessibilityWindowInfo;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.HashMap;
 import com.google.mlkit.vision.common.InputImage;
 import com.google.mlkit.vision.text.TextRecognition;
 import com.google.mlkit.vision.text.Text;
@@ -34,6 +35,7 @@ public class JarvisAccessibilityService extends AccessibilityService {
     static final String PREFS_BRIDGE = "accessibility_bridge";
     private static final String SANEAGO = "br.com.saneago";
     private static final String CHROME = "com.android.chrome";
+    private static final String WHATSAPP = "com.whatsapp";
 
     /**
      * Aplicativo oficial da concessionária — o quinto canal da cadeia.
@@ -136,6 +138,11 @@ public class JarvisAccessibilityService extends AccessibilityService {
                     readDebtsAgenciaWeb(request, intent.getStringExtra("property"));
                 } else if (operation.equals("bridge_equatorial")) {
                     bridgeAgenciaWeb(request, intent.getStringExtra("property"));
+                } else if (operation.equals("chrome_go_equatorial")) {
+                    readDebtsChromeGo(request, intent.getStringExtra("mode"),
+                        intent.getStringExtra("unit"));
+                } else if (operation.equals("holder_units_equatorial")) {
+                    discoverHolderUnits(request, intent.getStringExtra("unit"));
                 } else if (operation.equals("probe_app_equatorial")) {
                     probeEquatorialApp(request);
                 } else if (operation.equals("recover_equatorial")) {
@@ -152,6 +159,13 @@ public class JarvisAccessibilityService extends AccessibilityService {
                 } else if (operation.equals("boleto_equatorial")) {
                     BoletoBridge.invoiceIndex(JarvisAccessibilityService.this,
                         intent.getStringExtra("reference"), bridgeReply(request));
+                } else if (operation.equals("install_whatsapp")) {
+                    installWhatsAppFromPlayStore(request);
+                } else if (operation.equals("setup_whatsapp_companion")) {
+                    setupWhatsAppCompanion(request, 0, System.currentTimeMillis() + 90_000L);
+                } else if (operation.equals("clara_equatorial")) {
+                    startClaraConversation(request, intent.getStringExtra("unit"),
+                        intent.getStringExtra("document"), intent.getStringExtra("birth"));
                 } else reply(request, false, null, "Operacao nao permitida");
             } catch (Exception error) {
                 reply(request, false, null, error.getClass().getSimpleName() + ": " + error.getMessage());
@@ -193,6 +207,233 @@ public class JarvisAccessibilityService extends AccessibilityService {
     @Override public void onAccessibilityEvent(AccessibilityEvent event) { }
     @Override public void onInterrupt() { }
     @Override public void onDestroy() { unregisterReceiver(bridge); super.onDestroy(); }
+
+    /**
+     * Leva o WhatsApp oficial ate o QR de aparelho adicional, sem numero/SIM.
+     *
+     * A MIUI bloqueia eventos de entrada injetados por ADB. A ponte usa apenas a
+     * arvore de acessibilidade que o proprietario habilitou para o ROD e so
+     * reconhece os rotulos oficiais desta etapa. Ela nunca aceita pagamento,
+     * nunca escolhe restauracao e nunca digita telefone ou credencial.
+     */
+    private void setupWhatsAppCompanion(String request, int attempt, long deadline) {
+        if (System.currentTimeMillis() >= deadline || attempt >= 45) {
+            reply(request, false, null,
+                "EQUATORIAL_WHATSAPP_SETUP_TIMEOUT: QR de aparelho adicional nao apareceu");
+            return;
+        }
+        AccessibilityNodeInfo root = packageRoot(WHATSAPP);
+        if (root == null) {
+            Intent launch = getPackageManager().getLaunchIntentForPackage(WHATSAPP);
+            if (launch != null) startActivity(launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+            scheduleWhatsAppSetup(request, attempt + 1, deadline, 1600L);
+            return;
+        }
+
+        if (containsAnyLabel(root, "escaneie o codigo qr", "escanear codigo qr",
+                "scan this qr code", "vincular este aparelho")) {
+            root.recycle();
+            try {
+                reply(request, true, new JSONObject().put("qr_ready", true)
+                    .put("official_package", WHATSAPP), null);
+            } catch (Exception error) {
+                reply(request, false, null, "QR pronto, mas o estado nao pôde ser registrado");
+            }
+            return;
+        }
+
+        boolean advanced = false;
+        if (containsAnyLabel(root, "bem-vindo", "welcome to whatsapp")) {
+            advanced = gestureClickLabel(root, "concordar e continuar", "agree and continue");
+        } else if (containsAnyLabel(root, "vincular como dispositivo adicional",
+                "conectar como aparelho adicional", "link as companion device")) {
+            advanced = gestureClickLabel(root, "vincular como dispositivo adicional",
+                "conectar como aparelho adicional", "link as companion device");
+        } else if (containsAnyLabel(root, "insira seu numero", "digite seu numero",
+                "enter your phone number", "seu numero de telefone")) {
+            advanced = gestureClickLabel(root, "mais opcoes", "more options");
+        } else {
+            // O menu de tres pontos pode ser a unica pista textual nesta versao.
+            advanced = gestureClickLabel(root, "mais opcoes", "more options");
+        }
+        root.recycle();
+        scheduleWhatsAppSetup(request, attempt + 1, deadline, advanced ? 1800L : 900L);
+    }
+
+    private void scheduleWhatsAppSetup(String request, int attempt, long deadline, long delay) {
+        new Handler(Looper.getMainLooper()).postDelayed(
+            () -> setupWhatsAppCompanion(request, attempt, deadline), delay);
+    }
+
+    private boolean containsAnyLabel(AccessibilityNodeInfo root, String... labels) {
+        for (String label : labels) if (containsLabel(root, label)) return true;
+        return false;
+    }
+
+    /** Estado efêmero de uma consulta; os identificadores nunca tocam disco ou log. */
+    private static final class ClaraRun {
+        final String request, unit, document, birth;
+        final long deadline;
+        ClaraConversation.Stage stage = ClaraConversation.Stage.OPENING;
+        final Map<String, Integer> actions = new HashMap<>();
+        int polls;
+        ClaraRun(String request, String unit, String document, String birth) {
+            this.request = request; this.unit = unit; this.document = document;
+            this.birth = birth == null ? "" : birth;
+            this.deadline = System.currentTimeMillis() + 125_000L;
+        }
+    }
+
+    private void startClaraConversation(String request, String unit, String document, String birth) {
+        if (unit == null || unit.isEmpty() || document == null || document.isEmpty()) {
+            reply(request, false, null, "EQUATORIAL_CREDENTIALS_MISSING: dados ausentes no cofre");
+            return;
+        }
+        try {
+            getPackageManager().getPackageInfo(WHATSAPP, 0);
+            Intent chat = new Intent(Intent.ACTION_VIEW,
+                Uri.parse("https://wa.me/556232432020")).setPackage(WHATSAPP)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_REORDER_TO_FRONT);
+            startActivity(chat);
+            ClaraRun run = new ClaraRun(request, unit, document, birth);
+            new Handler(Looper.getMainLooper()).postDelayed(() -> advanceClara(run), 3500L);
+        } catch (Exception error) {
+            reply(request, false, null, "EQUATORIAL_WHATSAPP_NOT_INSTALLED: canal oficial indisponivel");
+        }
+    }
+
+    private void advanceClara(ClaraRun run) {
+        if (System.currentTimeMillis() >= run.deadline) {
+            reply(run.request, false, null,
+                "EQUATORIAL_PORTAL_TIMEOUT: Clara nao concluiu a consulta no prazo");
+            return;
+        }
+        AccessibilityNodeInfo root = packageRoot(WHATSAPP);
+        if (root == null) {
+            scheduleClara(run, 1000L);
+            return;
+        }
+        List<String> values = new ArrayList<>();
+        collect(root, values);
+        String transcript = String.join("\n", values);
+        ClaraConversation.Action action = ClaraConversation.decide(run.stage, transcript);
+
+        try {
+            if (action.kind == ClaraConversation.Kind.NOT_REGISTERED) {
+                root.recycle();
+                reply(run.request, false, null,
+                    "EQUATORIAL_WHATSAPP_NOT_REGISTERED: vincule o Poco como aparelho adicional");
+                return;
+            }
+            if (action.kind == ClaraConversation.Kind.FAILED) {
+                root.recycle();
+                reply(run.request, false, null,
+                    "EQUATORIAL_CHANNEL_UNSUPPORTED: contato oficial nao abriu");
+                return;
+            }
+            if (action.kind == ClaraConversation.Kind.NO_DEBT) {
+                root.recycle();
+                reply(run.request, true, new JSONObject()
+                    .put("source", "clara_whatsapp").put("bill_count", 0)
+                    .put("no_open_bills", true).put("debt_notice", "nenhuma fatura em aberto")
+                    .put("amount", "").put("reference", "").put("due_date", "")
+                    .put("barcode_present", false).put("pix_present", false), null);
+                return;
+            }
+            if (action.kind == ClaraConversation.Kind.BILL) {
+                EquatorialTextParser.Page page = EquatorialTextParser.parse(transcript);
+                root.recycle();
+                reply(run.request, true, new JSONObject()
+                    .put("source", "clara_whatsapp").put("bill_count", 1)
+                    .put("no_open_bills", false).put("amount", page.get("amount"))
+                    .put("reference", page.get("reference")).put("due_date", page.get("due_date"))
+                    .put("barcode_present", !page.get("barcode").isEmpty())
+                    .put("pix_present", !page.get("pix").isEmpty()), null);
+                return;
+            }
+            if (action.kind == ClaraConversation.Kind.CLICK) {
+                boolean clicked = clickClaraChoice(root, action.value);
+                root.recycle();
+                if (clicked) {
+                    run.stage = action.next; run.polls = 0;
+                    scheduleClara(run, 2400L);
+                } else {
+                    scheduleClara(run, 900L);
+                }
+                return;
+            }
+            if (action.kind == ClaraConversation.Kind.MESSAGE) {
+                String message = claraMessage(action.value, run);
+                String key = action.value + ":" + transcript.hashCode();
+                int repeats = run.actions.getOrDefault(action.value, 0);
+                // O portal às vezes repete a pergunta após atualizar. Reenviar uma
+                // vez é recuperação; uma terceira seria spam ou loop.
+                if (repeats < 2 && !run.actions.containsKey(key)
+                        && sendWhatsAppMessage(root, message)) {
+                    run.actions.put(action.value, repeats + 1);
+                    run.actions.put(key, 1);
+                    run.stage = action.next; run.polls = 0;
+                    root.recycle();
+                    scheduleClara(run, 3000L);
+                    return;
+                }
+            }
+            root.recycle();
+            run.polls++;
+            // Se a saudação abriu um menu que a versão atual não expôs como
+            // botão, peça o serviço por texto uma única vez.
+            if (run.stage == ClaraConversation.Stage.STARTED && run.polls == 5) {
+                AccessibilityNodeInfo fresh = packageRoot(WHATSAPP);
+                if (fresh != null) {
+                    sendWhatsAppMessage(fresh, "Consulta de débitos");
+                    fresh.recycle();
+                    run.stage = ClaraConversation.Stage.IDENTIFYING;
+                }
+            }
+            scheduleClara(run, 1000L);
+        } catch (Exception error) {
+            try { root.recycle(); } catch (Exception ignored) { }
+            reply(run.request, false, null,
+                "EQUATORIAL_PORTAL_TIMEOUT: conversa oficial ficou ilegivel");
+        }
+    }
+
+    private void scheduleClara(ClaraRun run, long delay) {
+        new Handler(Looper.getMainLooper()).postDelayed(() -> advanceClara(run), delay);
+    }
+
+    private static String claraMessage(String token, ClaraRun run) {
+        if ("HELLO".equals(token)) return "Ola, quero consultar debitos de energia em Goias.";
+        if ("UNIT".equals(token)) return run.unit;
+        if ("DOCUMENT".equals(token)) return run.document;
+        if ("BIRTH".equals(token)) return run.birth;
+        if ("YES".equals(token)) return "Sim";
+        return "";
+    }
+
+    private boolean sendWhatsAppMessage(AccessibilityNodeInfo root, String message) {
+        if (message == null || message.isEmpty()) return false;
+        List<AccessibilityNodeInfo> editors = new ArrayList<>();
+        collectEditors(root, editors);
+        if (editors.isEmpty()) return false;
+        AccessibilityNodeInfo editor = editors.get(editors.size() - 1);
+        setNodeText(editor, message);
+        boolean clicked = gestureClickLabel(root, "enviar", "send");
+        for (AccessibilityNodeInfo item : editors) item.recycle();
+        return clicked;
+    }
+
+    private boolean clickClaraChoice(AccessibilityNodeInfo root, String choice) {
+        if ("goias".equals(choice)) return gestureClickLabel(root, "goias", "goiás");
+        if ("aceitar".equals(choice))
+            return gestureClickLabel(root, "aceitar", "aceito", "concordar", "sim, aceito");
+        if ("consulta de debitos".equals(choice))
+            return gestureClickLabel(root, "consulta de debitos", "consulta de débitos",
+                "consultar debitos", "consultar débitos", "segunda via");
+        if ("continuar para a conversa".equals(choice))
+            return gestureClickLabel(root, "continuar para a conversa", "continue to chat");
+        return false;
+    }
 
     private void bringSaneagoToFront(String request) {
         performGlobalAction(GLOBAL_ACTION_HOME);
@@ -385,6 +626,670 @@ public class JarvisAccessibilityService extends AccessibilityService {
      * ate aqui em vez de esperar que o formulario apareca sozinho.
      */
     private static final String LOGIN_URL = "https://goias.equatorialenergia.com.br/LoginGO.aspx";
+
+    /** Site novo: login UC+CPF e funil que lista o débito antes de qualquer pagamento. */
+    private static final String GO_ACCOUNT_URL = AgenciaWebLogin.LOGIN_URL;
+    private static final String GO_DEBTS_URL =
+        "https://go.equatorialenergia.com.br" + AgenciaWebLogin.DEBTS_PATH;
+    private static final String GO_DOCUMENT_FIELD = "identificador";
+    private static final String GO_UNIT_FIELD = "senha-identificador";
+    private static final int GO_LOGIN_SUBMISSIONS = 5;
+    private static final long GO_FLOW_MILLIS = 56_000L;
+    /** Canal oficial de titular, autenticado por CPF+nascimento, sem SMS. */
+    private static final String HOLDER_LOGIN_URL =
+        "https://energiaemdia.equatorialenergia.com.br/login";
+    private static final long HOLDER_FLOW_MILLIS = 56_000L;
+
+    /**
+     * Descobre a correspondencia de uma UC legada pelo canal oficial do titular.
+     *
+     * Este passo existe somente para a migracao nacional de identificadores: ele
+     * nao consulta endpoint escondido e nao injeta JavaScript. O ROD preenche os
+     * controles visiveis do Chrome, escolhe Goias no select nativo e observa a
+     * pagina que a Equatorial devolve. Credenciais nunca entram na trilha.
+     */
+    private void discoverHolderUnits(String request, String legacyUnit) {
+        BillingConfig config = BillingConfig.load(getApplicationContext());
+        String document = config.value("equatorial_cpf").replaceAll("\\D", "");
+        String birth = config.value("equatorial_birth_date").trim();
+        String legacy = legacyUnit == null ? "" : legacyUnit.replaceAll("\\D", "");
+        if (document.length() != 11 || !birth.matches("\\d{2}/\\d{2}/\\d{4}")
+                || legacy.isEmpty()) {
+            reply(request, false, null,
+                "EQUATORIAL_AUTH_REQUIRED: identificacao do titular incompleta no cofre");
+            return;
+        }
+        RodLog.step("titular", "abrindo canal oficial CPF+nascimento para mapear UC legada");
+        long deadline = System.currentTimeMillis() + HOLDER_FLOW_MILLIS;
+        openRoute(HOLDER_LOGIN_URL);
+        new Handler(Looper.getMainLooper()).postDelayed(
+            () -> holderLoginStep(request, legacy, document, birth, deadline, 0), 2200);
+    }
+
+    private void holderLoginStep(String request, String legacy, String document,
+                                 String birth, long deadline, int poll) {
+        if (System.currentTimeMillis() >= deadline) {
+            reply(request, false, null,
+                "EQUATORIAL_PORTAL_TIMEOUT: canal oficial do titular nao concluiu o login");
+            return;
+        }
+        AccessibilityNodeInfo root = packageRoot(CHROME);
+        if (root == null) {
+            new Handler(Looper.getMainLooper()).postDelayed(
+                () -> holderLoginStep(request, legacy, document, birth, deadline, poll + 1), 700);
+            return;
+        }
+        if (containsLabel(root, "nos usamos cookies") || containsLabel(root, "cookies")) {
+            boolean closed = gestureClickExact(root, "rejeitar");
+            if (!closed) closed = clickFirst(root, "rejeitar");
+            root.recycle();
+            RodLog.step("titular", "aviso de cookies fechado=" + closed);
+            new Handler(Looper.getMainLooper()).postDelayed(
+                () -> holderLoginStep(request, legacy, document, birth, deadline, poll + 1), 900);
+            return;
+        }
+        List<AccessibilityNodeInfo> editors = new ArrayList<>();
+        collectWebEditors(root, editors);
+        if (editors.size() < 2) {
+            for (AccessibilityNodeInfo editor : editors) editor.recycle();
+            root.recycle();
+            if (poll > 2) {
+                holderInspect(request, legacy, deadline, 0);
+                return;
+            }
+            new Handler(Looper.getMainLooper()).postDelayed(
+                () -> holderLoginStep(request, legacy, document, birth, deadline, poll + 1), 700);
+            return;
+        }
+        setNodeText(editors.get(0), document);
+        setNodeText(editors.get(1), birth);
+        for (AccessibilityNodeInfo editor : editors) editor.recycle();
+        AccessibilityNodeInfo state = findByViewId(root, "state");
+        boolean stateReady = state != null
+            && EquatorialSession.fold(String.valueOf(state.getText())).contains("goias");
+        Rect stateBounds = new Rect();
+        if (state != null) state.getBoundsInScreen(stateBounds);
+        if (state != null) state.recycle();
+        root.recycle();
+        RodLog.step("titular", "campos preenchidos; estado_pronto=" + stateReady
+            + " seletor_visivel=" + !stateBounds.isEmpty());
+        if (stateReady) {
+            new Handler(Looper.getMainLooper()).postDelayed(
+                () -> holderSubmit(request, legacy, document, birth, deadline), 500);
+        } else if (!stateBounds.isEmpty()) {
+            Path path = new Path();
+            path.moveTo(stateBounds.exactCenterX(), stateBounds.exactCenterY());
+            GestureDescription gesture = new GestureDescription.Builder()
+                .addStroke(new GestureDescription.StrokeDescription(path, 0, 140)).build();
+            boolean scheduled = dispatchGesture(gesture, new GestureResultCallback() {
+                @Override public void onCompleted(GestureDescription description) {
+                    RodLog.step("titular", "toque fisico no seletor concluido");
+                    new Handler(Looper.getMainLooper()).postDelayed(
+                        () -> holderChooseGoias(request, legacy, document, birth, deadline, 0), 500);
+                }
+                @Override public void onCancelled(GestureDescription description) {
+                    holderLoginStep(request, legacy, document, birth, deadline, poll + 1);
+                }
+            }, null);
+            if (!scheduled) holderLoginStep(request, legacy, document, birth, deadline, poll + 1);
+        } else {
+            new Handler(Looper.getMainLooper()).postDelayed(
+                () -> holderLoginStep(request, legacy, document, birth, deadline, poll + 1), 700);
+        }
+    }
+
+    private void holderChooseGoias(String request, String legacy, String document,
+                                   String birth, long deadline, int poll) {
+        AccessibilityNodeInfo dialog = contractDialogRoot();
+        if (dialog == null) {
+            if (poll < 10 && System.currentTimeMillis() < deadline) {
+                new Handler(Looper.getMainLooper()).postDelayed(
+                    () -> holderChooseGoias(request, legacy, document, birth, deadline, poll + 1), 400);
+                return;
+            }
+            holderLoginStep(request, legacy, document, birth, deadline, poll + 1);
+            return;
+        }
+        boolean selected = gestureClickExact(dialog, "goias");
+        if (!selected) selected = clickFirst(dialog, "goiás", "goias");
+        dialog.recycle();
+        RodLog.step("titular", "Goias selecionado=" + selected);
+        new Handler(Looper.getMainLooper()).postDelayed(
+            () -> holderSubmit(request, legacy, document, birth, deadline), 900);
+    }
+
+    private void holderSubmit(String request, String legacy, String document,
+                              String birth, long deadline) {
+        AccessibilityNodeInfo root = packageRoot(CHROME);
+        if (root == null) {
+            new Handler(Looper.getMainLooper()).postDelayed(
+                () -> holderLoginStep(request, legacy, document, birth, deadline, 0), 600);
+            return;
+        }
+        List<AccessibilityNodeInfo> editors = new ArrayList<>();
+        collectWebEditors(root, editors);
+        boolean ready = editors.size() >= 2
+            && filled(editors.get(0), document) && filled(editors.get(1), birth);
+        for (AccessibilityNodeInfo editor : editors) editor.recycle();
+        boolean clicked = ready && gestureClickExact(root, "continuar");
+        if (!clicked && ready) clicked = clickFirst(root, "continuar");
+        root.recycle();
+        RodLog.step("titular", "CONTINUAR acionado=" + clicked);
+        if (!clicked) {
+            new Handler(Looper.getMainLooper()).postDelayed(
+                () -> holderLoginStep(request, legacy, document, birth, deadline, 0), 700);
+            return;
+        }
+        new Handler(Looper.getMainLooper()).postDelayed(
+            () -> holderInspect(request, legacy, deadline, 0), 8000);
+    }
+
+    private void holderInspect(String request, String legacy, long deadline, int poll) {
+        if (System.currentTimeMillis() >= deadline) {
+            reply(request, false, null,
+                "EQUATORIAL_PORTAL_TIMEOUT: canal do titular nao mostrou as unidades");
+            return;
+        }
+        AccessibilityNodeInfo root = packageRoot(CHROME);
+        if (root == null) {
+            new Handler(Looper.getMainLooper()).postDelayed(
+                () -> holderInspect(request, legacy, deadline, poll + 1), 700);
+            return;
+        }
+        List<AccessibilityNodeInfo> editors = new ArrayList<>();
+        collectWebEditors(root, editors);
+        boolean loginStillVisible = editors.size() >= 2 && containsLabel(root, "entre na sua conta");
+        for (AccessibilityNodeInfo editor : editors) editor.recycle();
+        List<String> values = new ArrayList<>();
+        collect(root, values);
+        String text = String.join("\n", values);
+        root.recycle();
+        if (loginStillVisible) {
+            if (poll < 8) {
+                new Handler(Looper.getMainLooper()).postDelayed(
+                    () -> holderInspect(request, legacy, deadline, poll + 1), 900);
+                return;
+            }
+            reply(request, false, null,
+                "EQUATORIAL_AUTH_REQUIRED: canal oficial do titular recusou CPF, nascimento ou estado");
+            return;
+        }
+        try {
+            reply(request, true, new JSONObject()
+                .put("authenticated", true)
+                .put("legacy_visible", ContractMatch.matches(text, legacy))
+                .put("page_items", values.size()), null);
+        } catch (Exception error) {
+            reply(request, false, null,
+                "EQUATORIAL_MAPPING_NOT_FOUND: pagina autenticada ficou ilegivel");
+        }
+    }
+
+    /**
+     * Consulta pelo site novo dentro do Chrome real.
+     *
+     * O WebView chegou ao funil, mas o reCAPTCHA por pontuação não emitiu uma
+     * requisição. Este caminho usa o Chrome normal do Poco, preserva o desafio e
+     * só aciona controles visíveis. Recarregar o formulário não é considerado
+     * imediatamente uma recusa: o portal às vezes redesenha os dois campos e
+     * apaga um deles enquanto calcula risco, então cada rodada confere os dois,
+     * reaplica somente o ausente e tem teto absoluto.
+     */
+    private void readDebtsChromeGo(final String request, final String property,
+                                   final String mappedUnit) {
+        final String imovel = property == null || property.trim().isEmpty()
+            ? "casa" : property.trim();
+        final String unit;
+        final String document;
+        try {
+            BillingConfig config = BillingConfig.load(getApplicationContext());
+            String configured = mappedUnit == null || mappedUnit.trim().isEmpty()
+                ? config.value(imovel + "_energy") : mappedUnit;
+            unit = AgenciaWebLogin.unit(configured);
+            document = AgenciaWebLogin.document(config.value("equatorial_cpf"));
+            if (!AgenciaWebLogin.ready(document, unit))
+                throw new IllegalStateException(
+                    "EQUATORIAL_AUTH_REQUIRED: credenciais ausentes no cofre");
+        } catch (Exception error) {
+            reply(request, false, null, error.getMessage());
+            return;
+        }
+        RodLog.step("chrome-go", "imovel=" + imovel
+            + " documento=" + RodLog.describe(document)
+            + " unidade=" + RodLog.describe(unit));
+        // Primeiro mede a sessão existente. Isso evita gastar um login quando o
+        // job seguinte pede o mesmo imóvel e permite sair explicitamente quando
+        // a sessão pertence a outra UC.
+        long deadline = System.currentTimeMillis() + GO_FLOW_MILLIS;
+        AccessibilityNodeInfo active = packageRoot(CHROME);
+        if (active != null) {
+            List<String> currentValues = new ArrayList<>();
+            collect(active, currentValues);
+            String currentText = String.join("\n", currentValues).replaceAll("\\s", "");
+            boolean sameUnit = currentText.contains(unit);
+            boolean currentFunnel = containsLabel(active, "pagamento de faturas on line")
+                || containsLabel(active, "pagamento de faturas online");
+            AccessibilityNodeInfo loginDocument = findByViewId(active, GO_DOCUMENT_FIELD);
+            boolean loginForm = loginDocument != null;
+            if (loginDocument != null) loginDocument.recycle();
+            active.recycle();
+            if (sameUnit && currentFunnel && !loginForm) {
+                RodLog.step("chrome-go", "reutilizando guia estabilizada do imovel pedido");
+                new Handler(Looper.getMainLooper()).postDelayed(
+                    () -> chromeGoDebtStep(request, unit, deadline, false, 0), 500);
+                return;
+            }
+        }
+        openRoute(GO_DEBTS_URL);
+        new Handler(Looper.getMainLooper()).postDelayed(
+            () -> chromeGoInitial(request, unit, document, deadline, 0), 2200);
+    }
+
+    private void chromeGoInitial(String request, String unit, String document,
+                                 long deadline, int poll) {
+        if (System.currentTimeMillis() >= deadline) {
+            reply(request, false, null,
+                "EQUATORIAL_PORTAL_TIMEOUT: o site novo nao mostrou um estado inicial");
+            return;
+        }
+        AccessibilityNodeInfo root = packageRoot(CHROME);
+        if (root == null) {
+            new Handler(Looper.getMainLooper()).postDelayed(
+                () -> chromeGoInitial(request, unit, document, deadline, poll + 1), 800);
+            return;
+        }
+        List<String> values = new ArrayList<>();
+        collect(root, values);
+        String text = String.join("\n", values).replaceAll("\\s", "");
+        boolean requestedUnit = text.contains(unit);
+        boolean funnel = containsLabel(root, "pagamento de faturas on line")
+            || containsLabel(root, "pagamento de faturas online");
+        AccessibilityNodeInfo doc = findByViewId(root, GO_DOCUMENT_FIELD);
+        AccessibilityNodeInfo uc = findByViewId(root, GO_UNIT_FIELD);
+        boolean login = doc != null && uc != null;
+        if (requestedUnit && funnel && !login) {
+            if (doc != null) doc.recycle();
+            if (uc != null) uc.recycle();
+            root.recycle();
+            RodLog.step("chrome-go", "sessao existente pertence ao imovel pedido");
+            chromeGoDebtStep(request, unit, deadline, false, 0);
+            return;
+        }
+        if (doc != null) doc.recycle();
+        if (uc != null) uc.recycle();
+        if (login) {
+            root.recycle();
+            chromeGoLogin(request, unit, document, deadline, 0, 0);
+            return;
+        }
+        if (containsLabel(root, "sair")) {
+            boolean clicked = gestureClickExact(root, "sair");
+            if (!clicked) clicked = gestureClickLabel(root, "sair");
+            if (!clicked) clicked = clickFirst(root, "sair");
+            root.recycle();
+            RodLog.step("chrome-go", "sessao era de outra unidade; SAIR acionado=" + clicked);
+            new Handler(Looper.getMainLooper()).postDelayed(() -> {
+                openRoute(GO_ACCOUNT_URL);
+                new Handler(Looper.getMainLooper()).postDelayed(
+                    () -> chromeGoLogin(request, unit, document, deadline, 0, 0), 1800);
+            }, 1400);
+            return;
+        }
+        if (hasOverlay(root)) gestureClickLabel(root, "fechar");
+        root.recycle();
+        if (poll == 3) openRoute(GO_ACCOUNT_URL);
+        new Handler(Looper.getMainLooper()).postDelayed(
+            () -> chromeGoInitial(request, unit, document, deadline, poll + 1), 900);
+    }
+
+    private void chromeGoLogin(String request, String unit, String document,
+                               long deadline, int poll, int submissions) {
+        if (System.currentTimeMillis() >= deadline) {
+            reply(request, false, null,
+                "EQUATORIAL_PORTAL_TIMEOUT: o site novo nao concluiu o login no Chrome");
+            return;
+        }
+        AccessibilityNodeInfo root = packageRoot(CHROME);
+        if (root == null) {
+            new Handler(Looper.getMainLooper()).postDelayed(
+                () -> chromeGoLogin(request, unit, document, deadline, poll + 1, submissions),
+                UI_POLL_MILLIS * 2);
+            return;
+        }
+        if (hasOverlay(root)) {
+            if (submissions > 0) {
+                // Depois do login o site abre um cadastro LGPD opcional com
+                // nome/e-mail/telefone e desabilita Fechar. O JWT já existe —
+                // confirmado no Chrome real ao abrir o funil — então atravessar
+                // pela própria rota oficial evita inventar dados ou consentir.
+                root.recycle();
+                RodLog.step("chrome-go", "painel LGPD pos-login; seguindo sem consentir");
+                openRoute(GO_DEBTS_URL);
+                new Handler(Looper.getMainLooper()).postDelayed(
+                    () -> chromeGoDebtStep(request, unit, deadline, false, 0), 2500);
+                return;
+            }
+            // Fechar não concede o consentimento do botão Enviar.
+            gestureClickLabel(root, "fechar");
+            root.recycle();
+            new Handler(Looper.getMainLooper()).postDelayed(
+                () -> chromeGoLogin(request, unit, document, deadline, poll + 1, submissions), 1200);
+            return;
+        }
+        AccessibilityNodeInfo docField = findByViewId(root, GO_DOCUMENT_FIELD);
+        AccessibilityNodeInfo unitField = findByViewId(root, GO_UNIT_FIELD);
+        boolean form = docField != null && unitField != null;
+        if (!form) {
+            if (docField != null) docField.recycle();
+            if (unitField != null) unitField.recycle();
+            // Antes do primeiro envio, ausência é só carregamento. Depois dele,
+            // desaparecer é o marcador observável de sessão aceita.
+            boolean rejected = containsLabel(root, AgenciaWebLogin.GENERIC_FAILURE_CODE)
+                || containsLabel(root, "não foi possível realizar seu login")
+                || containsLabel(root, "nao foi possivel realizar seu login");
+            root.recycle();
+            if (rejected) {
+                reply(request, false, null,
+                    "EQUATORIAL_AUTH_REQUIRED: a Agencia Web recusou o acesso no Chrome");
+                return;
+            }
+            if (submissions > 0 && poll >= 2) {
+                RodLog.step("chrome-go", "formulario saiu da tela; abrindo lista de debitos");
+                openRoute(GO_DEBTS_URL);
+                new Handler(Looper.getMainLooper()).postDelayed(
+                    () -> chromeGoDebtStep(request, unit, deadline, false, 0), 2500);
+                return;
+            }
+            new Handler(Looper.getMainLooper()).postDelayed(
+                () -> chromeGoLogin(request, unit, document, deadline, poll + 1, submissions),
+                UI_POLL_MILLIS * 2);
+            return;
+        }
+        if (submissions >= GO_LOGIN_SUBMISSIONS) {
+            docField.recycle(); unitField.recycle(); root.recycle();
+            reply(request, false, null,
+                "EQUATORIAL_AUTH_REQUIRED: o formulario do site novo foi recarregado cinco vezes");
+            return;
+        }
+        boolean docOk = filled(docField, document);
+        boolean unitOk = filled(unitField, unit);
+        if (!docOk) setNodeText(docField, document);
+        if (!unitOk) setNodeText(unitField, unit);
+        docField.recycle(); unitField.recycle(); root.recycle();
+        RodLog.step("chrome-go", "rodada=" + submissions
+            + " documento_ok=" + docOk + " unidade_ok=" + unitOk);
+        new Handler(Looper.getMainLooper()).postDelayed(
+            () -> chromeGoSubmit(request, unit, document, deadline, submissions), 700);
+    }
+
+    private void chromeGoSubmit(String request, String unit, String document,
+                                long deadline, int submissions) {
+        AccessibilityNodeInfo root = packageRoot(CHROME);
+        if (root == null) {
+            new Handler(Looper.getMainLooper()).postDelayed(
+                () -> chromeGoLogin(request, unit, document, deadline, 0, submissions), 800);
+            return;
+        }
+        AccessibilityNodeInfo docField = findByViewId(root, GO_DOCUMENT_FIELD);
+        AccessibilityNodeInfo unitField = findByViewId(root, GO_UNIT_FIELD);
+        boolean ready = docField != null && unitField != null
+            && filled(docField, document) && filled(unitField, unit);
+        if (docField != null) docField.recycle();
+        if (unitField != null) unitField.recycle();
+        boolean clicked = ready && gestureClickExact(root, "acessar");
+        if (!clicked && ready) clicked = gestureClickLabel(root, "acessar");
+        root.recycle();
+        RodLog.step("chrome-go", "ACESSAR acionado=" + clicked);
+        if (!clicked) {
+            new Handler(Looper.getMainLooper()).postDelayed(
+                () -> chromeGoLogin(request, unit, document, deadline, 0, submissions), 800);
+            return;
+        }
+        // O reCAPTCHA executa de forma assíncrona. Oito segundos evita reenviar
+        // enquanto a tentativa legítima ainda está sendo julgada.
+        new Handler(Looper.getMainLooper()).postDelayed(
+            () -> chromeGoLogin(request, unit, document, deadline, 0, submissions + 1), 8000);
+    }
+
+    private void chromeGoDebtStep(String request, String unit, long deadline,
+                                  boolean advanced, int poll) {
+        if (System.currentTimeMillis() >= deadline) {
+            reply(request, false, null,
+                "EQUATORIAL_PORTAL_TIMEOUT: o funil oficial nao entregou a fatura");
+            return;
+        }
+        AccessibilityNodeInfo root = packageRoot(CHROME);
+        if (root == null) {
+            new Handler(Looper.getMainLooper()).postDelayed(
+                () -> chromeGoDebtStep(request, unit, deadline, advanced, poll + 1), 800);
+            return;
+        }
+        if (hasOverlay(root)) {
+            gestureClickLabel(root, "fechar");
+            root.recycle();
+            new Handler(Looper.getMainLooper()).postDelayed(
+                () -> chromeGoDebtStep(request, unit, deadline, advanced, poll + 1), 1200);
+            return;
+        }
+        AccessibilityNodeInfo loginField = findByViewId(root, GO_DOCUMENT_FIELD);
+        if (loginField != null) {
+            loginField.recycle();
+            root.recycle();
+            reply(request, false, null,
+                "EQUATORIAL_AUTH_REQUIRED: a sessao do site novo nao chegou ao funil");
+            return;
+        }
+        List<String> values = new ArrayList<>();
+        collect(root, values);
+        String text = String.join("\n", values);
+        if (!text.replaceAll("\\s", "").contains(unit)) {
+            root.recycle();
+            reply(request, false, null,
+                "EQUATORIAL_CONTRACT_NOT_FOUND: o funil abriu uma unidade diferente da pedida");
+            return;
+        }
+        String notice = AgenciaWebLogin.debtNotice(EquatorialSession.fold(text));
+        AccessibilityNodeInfo chooserButton = findByViewId(root, "submit-payment-bemobi");
+        boolean chooserStillVisible = chooserButton != null;
+        if (chooserButton != null) chooserButton.recycle();
+        try {
+            EquatorialTextParser.Page page = EquatorialTextParser.parse(text);
+            boolean amount = !page.get("amount").isEmpty();
+            boolean reference = !page.get("reference").isEmpty();
+            // A página de escolha tem textos institucionais no rodapé que o
+            // vocabulário de "conta em dia" pode reconhecer fora de contexto.
+            // Antes de Continuar, somente valor+referência é desfecho; aviso de
+            // ausência só vale na tela que o servidor devolve depois do envio.
+            if ((amount && reference)
+                || (advanced && !chooserStillVisible && !notice.isEmpty())) {
+                JSONObject result = new JSONObject()
+                    .put("amount", page.get("amount"))
+                    .put("reference", page.get("reference"))
+                    .put("due_date", page.get("due_date"))
+                    .put("no_open_bills",
+                        advanced && !chooserStillVisible && !notice.isEmpty())
+                    .put("debt_notice", notice)
+                    .put("bill_count", amount && reference ? 1 : 0)
+                    .put("read_provider", AgenciaWebLogin.ReadProvider.READ_PROVIDER_OK.name())
+                    .put("read_only", true).put("barcode_present", false)
+                    .put("pix_present", false).put("chrome_real", true);
+                root.recycle();
+                RodLog.step("chrome-go", "consulta concluida valor=" + amount
+                    + " referencia=" + reference + " sem_debito="
+                    + (advanced && !chooserStillVisible && !notice.isEmpty()));
+                reply(request, true, result, null);
+                return;
+            }
+        } catch (Exception parseError) {
+            root.recycle();
+            reply(request, false, null,
+                "EQUATORIAL_BILL_NOT_FOUND: a tela oficial nao ficou legivel");
+            return;
+        }
+        if (!advanced) {
+            AccessibilityNodeInfo button = findByViewId(root, "submit-payment-bemobi");
+            Rect bounds = new Rect();
+            if (button != null) {
+                button.getBoundsInScreen(bounds);
+                int width = getResources().getDisplayMetrics().widthPixels;
+                int height = getResources().getDisplayMetrics().heightPixels;
+                boolean onScreen = !bounds.isEmpty()
+                    && bounds.exactCenterX() >= 0 && bounds.exactCenterX() < width
+                    && bounds.exactCenterY() >= 0 && bounds.exactCenterY() < height;
+                RodLog.step("chrome-go", "CONTINUAR geometria="
+                    + bounds.width() + "x" + bounds.height() + " na_tela=" + onScreen);
+                if (!onScreen) {
+                    // ACTION_CLICK em nó web fora da dobra devolve true sem
+                    // disparar evento. Primeiro rola o WebView e volta a medir;
+                    // o gesto só é permitido quando o nó tem coordenada real.
+                    boolean scrolled = scrollForward(root);
+                    if (!scrolled) scrolled = gestureScrollUp();
+                    button.recycle();
+                    root.recycle();
+                    RodLog.step("chrome-go", "CONTINUAR fora da dobra; rolou=" + scrolled);
+                    if (scrolled && poll < 8) {
+                        new Handler(Looper.getMainLooper()).postDelayed(
+                            () -> chromeGoDebtStep(request, unit, deadline, false, poll + 1), 900);
+                        return;
+                    }
+                    reply(request, false, null,
+                        "EQUATORIAL_PORTAL_TIMEOUT: o Chrome nao revelou o botao Continuar");
+                    return;
+                }
+            }
+            if (button == null || bounds.isEmpty()) {
+                if (button != null) button.recycle();
+                root.recycle();
+                reply(request, false, null,
+                    "EQUATORIAL_BILL_NOT_FOUND: o funil oficial nao exibiu Continuar");
+                return;
+            }
+            // Em conteúdo web o ACTION_CLICK preserva a ativação semântica do
+            // botão (incluindo submit e reCAPTCHA). O gesto por coordenada é
+            // apenas fallback: ele pode terminar no Android sem que o DOM
+            // receba um evento, por exemplo quando o Chrome reposiciona a
+            // viewport entre a leitura do nó e a injeção do toque.
+            boolean semanticClick = button.performAction(AccessibilityNodeInfo.ACTION_CLICK);
+            button.recycle();
+            root.recycle();
+            if (semanticClick) {
+                RodLog.step("chrome-go", "CONTINUAR acao semantica aceita pelo Chrome");
+                new Handler(Looper.getMainLooper()).postDelayed(
+                    () -> verifySemanticContinue(request, unit, deadline), 1400);
+            } else {
+                tapContinue(request, unit, deadline, bounds, 0);
+            }
+            return;
+        } else {
+            if (chooserStillVisible && poll == 5) {
+                AccessibilityNodeInfo retry = findByViewId(root, "submit-payment-bemobi");
+                Rect retryBounds = new Rect();
+                if (retry != null) {
+                    retry.getBoundsInScreen(retryBounds);
+                    retry.recycle();
+                }
+                root.recycle();
+                if (!retryBounds.isEmpty()) {
+                    RodLog.step("chrome-go", "pagina nao avancou; repetindo toque fisico uma vez");
+                    tapContinue(request, unit, deadline, retryBounds, 6);
+                    return;
+                }
+                new Handler(Looper.getMainLooper()).postDelayed(
+                    () -> chromeGoDebtStep(request, unit, deadline, true, poll + 1), 900);
+                return;
+            }
+            root.recycle();
+            if (poll < 16) {
+                new Handler(Looper.getMainLooper()).postDelayed(
+                    () -> chromeGoDebtStep(request, unit, deadline, true, poll + 1), 900);
+                return;
+            }
+        }
+        reply(request, false, null,
+            "EQUATORIAL_BILL_NOT_FOUND: o funil oficial nao exibiu debito nem estado em dia");
+    }
+
+    /**
+     * ACTION_CLICK pode devolver true para um nó HTML sem entregar o evento ao
+     * DOM do Chrome. Antes do fallback físico, confirmamos que o mesmo botão
+     * ainda está presente; assim não há segundo toque depois de uma navegação.
+     */
+    private void verifySemanticContinue(String request, String unit, long deadline) {
+        AccessibilityNodeInfo root = packageRoot(CHROME);
+        if (root == null) {
+            new Handler(Looper.getMainLooper()).postDelayed(
+                () -> chromeGoDebtStep(request, unit, deadline, true, 0), 1200);
+            return;
+        }
+        AccessibilityNodeInfo button = findByViewId(root, "submit-payment-bemobi");
+        if (button == null) {
+            root.recycle();
+            RodLog.step("chrome-go", "CONTINUAR saiu da pagina apos acao semantica");
+            chromeGoDebtStep(request, unit, deadline, true, 0);
+            return;
+        }
+        Rect bounds = new Rect();
+        button.getBoundsInScreen(bounds);
+        button.recycle();
+        root.recycle();
+        RodLog.step("chrome-go", "acao semantica nao mudou a pagina; usando toque fisico");
+        tapContinue(request, unit, deadline, bounds, 0);
+    }
+
+    /** Rola o primeiro contêiner acessível; não injeta gesto nem usa coordenada. */
+    private boolean scrollForward(AccessibilityNodeInfo node) {
+        if (node.isScrollable()
+            && node.performAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD)) return true;
+        for (int i = 0; i < node.getChildCount(); i++) {
+            AccessibilityNodeInfo child = node.getChild(i);
+            if (child != null) {
+                boolean scrolled = scrollForward(child);
+                child.recycle();
+                if (scrolled) return true;
+            }
+        }
+        return false;
+    }
+
+    /** Rolagem física pelo serviço, usada só quando o WebView recusa ACTION_SCROLL. */
+    private boolean gestureScrollUp() {
+        int width = getResources().getDisplayMetrics().widthPixels;
+        int height = getResources().getDisplayMetrics().heightPixels;
+        Path path = new Path();
+        path.moveTo(width / 2f, height * 0.78f);
+        path.lineTo(width / 2f, height * 0.34f);
+        return dispatchGesture(new GestureDescription.Builder()
+            .addStroke(new GestureDescription.StrokeDescription(path, 0, 450)).build(), null, null);
+    }
+
+    /**
+     * Toca Continuar e só chama de toque depois do callback do Android.
+     *
+     * {@code dispatchGesture} devolver true significa apenas "agendado". A
+     * versão anterior tratava isso como clique consumado e esperava uma resposta
+     * de rede para um evento que podia ter sido cancelado pelo sistema.
+     */
+    private void tapContinue(String request, String unit, long deadline,
+                             Rect bounds, int nextPoll) {
+        Path path = new Path();
+        path.moveTo(bounds.exactCenterX(), bounds.exactCenterY());
+        GestureDescription gesture = new GestureDescription.Builder()
+            .addStroke(new GestureDescription.StrokeDescription(path, 0, 140)).build();
+        boolean scheduled = dispatchGesture(gesture, new GestureResultCallback() {
+            @Override public void onCompleted(GestureDescription description) {
+                RodLog.step("chrome-go", "CONTINUAR gesto concluido pelo Android");
+                new Handler(Looper.getMainLooper()).postDelayed(
+                    () -> chromeGoDebtStep(request, unit, deadline, true, nextPoll), 6500);
+            }
+            @Override public void onCancelled(GestureDescription description) {
+                RodLog.fail("chrome-go", "CONTINUAR gesto cancelado pelo Android");
+                reply(request, false, null,
+                    "EQUATORIAL_PORTAL_TIMEOUT: o Android cancelou o toque em Continuar");
+            }
+        }, null);
+        if (!scheduled) reply(request, false, null,
+            "EQUATORIAL_PORTAL_TIMEOUT: o Android recusou agendar o toque em Continuar");
+    }
 
     /**
      * Diz em que estado a sessao esta, sem tratar expiracao como falha.
@@ -1448,6 +2353,23 @@ public class JarvisAccessibilityService extends AccessibilityService {
         }
     }
 
+    /** Editores da pagina, excluindo a barra de endereco editavel do Chrome. */
+    private static void collectWebEditors(AccessibilityNodeInfo node,
+                                          List<AccessibilityNodeInfo> result) {
+        String id = node.getViewIdResourceName();
+        boolean browserToolbar = id != null && id.startsWith("com.android.chrome:id/");
+        if (!browserToolbar && (node.isEditable()
+                || "android.widget.EditText".contentEquals(node.getClassName())))
+            result.add(AccessibilityNodeInfo.obtain(node));
+        for (int i = 0; i < node.getChildCount(); i++) {
+            AccessibilityNodeInfo child = node.getChild(i);
+            if (child != null) {
+                collectWebEditors(child, result);
+                child.recycle();
+            }
+        }
+    }
+
     private static void setNodeText(AccessibilityNodeInfo node, String value) {
         android.os.Bundle arguments = new android.os.Bundle();
         arguments.putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, value);
@@ -1471,10 +2393,11 @@ public class JarvisAccessibilityService extends AccessibilityService {
     }
 
     private boolean gestureClickLabel(AccessibilityNodeInfo node, String... labels) {
-        String value = ((node.getText() == null ? "" : node.getText()) + " " +
-            (node.getContentDescription() == null ? "" : node.getContentDescription())).toLowerCase();
+        String value = ClaraConversation.fold(
+            (node.getText() == null ? "" : node.getText()) + " " +
+            (node.getContentDescription() == null ? "" : node.getContentDescription()));
         for (String label : labels) {
-            if (value.contains(label)) {
+            if (value.contains(ClaraConversation.fold(label))) {
                 Rect bounds = new Rect();
                 node.getBoundsInScreen(bounds);
                 if (!bounds.isEmpty()) {
@@ -1622,9 +2545,10 @@ public class JarvisAccessibilityService extends AccessibilityService {
     }
 
     private static boolean containsLabel(AccessibilityNodeInfo node, String label) {
-        String value = ((node.getText() == null ? "" : node.getText()) + " " +
-            (node.getContentDescription() == null ? "" : node.getContentDescription())).toLowerCase();
-        if (value.contains(label)) return true;
+        String value = ClaraConversation.fold(
+            (node.getText() == null ? "" : node.getText()) + " " +
+            (node.getContentDescription() == null ? "" : node.getContentDescription()));
+        if (value.contains(ClaraConversation.fold(label))) return true;
         for (int i = 0; i < node.getChildCount(); i++) {
             AccessibilityNodeInfo child = node.getChild(i);
             if (child != null) {
@@ -1749,6 +2673,41 @@ public class JarvisAccessibilityService extends AccessibilityService {
             }
         }
         return false;
+    }
+
+    /** Instala exclusivamente o WhatsApp oficial já aberto na Play Store. */
+    private void installWhatsAppFromPlayStore(String request) {
+        Intent market = new Intent(Intent.ACTION_VIEW,
+            android.net.Uri.parse("market://details?id=com.whatsapp"))
+            .setPackage("com.android.vending")
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        startActivity(market);
+        new Handler(Looper.getMainLooper()).postDelayed(
+            () -> clickWhatsAppInstall(request, System.currentTimeMillis() + 45_000L), 2500L);
+    }
+
+    private void clickWhatsAppInstall(String request, long deadline) {
+        AccessibilityNodeInfo root = packageRoot("com.android.vending");
+        if (root != null) {
+            List<String> text = new ArrayList<>();
+            collect(root, text);
+            String folded = EquatorialSession.fold(android.text.TextUtils.join(" ", text));
+            if (folded.contains("abrir") || folded.contains("desinstalar")) {
+                root.recycle();
+                reply(request, true, new JSONObject(), null);
+                return;
+            }
+            boolean clicked = gestureClickLabel(root, "instalar");
+            root.recycle();
+            if (clicked) {
+                reply(request, true, new JSONObject(), null);
+                return;
+            }
+        }
+        if (System.currentTimeMillis() < deadline) {
+            new Handler(Looper.getMainLooper()).postDelayed(
+                () -> clickWhatsAppInstall(request, deadline), 1200L);
+        } else reply(request, false, null, "Botao Instalar do WhatsApp oficial nao encontrado");
     }
 
     static JSONObject parseOcr(String raw) throws Exception {

@@ -36,6 +36,24 @@ public class MainActivity extends Activity {
         }
         setContentView(buildDashboard());
         refreshStatus();
+        // Entrada operacional usada pelo PC administrador: só abre a ficha
+        // oficial da Play Store e aciona a preparação já limitada no agente.
+        prepareClaraIfRequested(getIntent());
+    }
+
+    @Override protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        prepareClaraIfRequested(intent);
+    }
+
+    private void prepareClaraIfRequested(Intent intent) {
+        if (intent != null && intent.getBooleanExtra("prepare_clara", false)) {
+            Executors.newSingleThreadExecutor().execute(() -> {
+                try { WhatsAppSetup.prepare(getApplicationContext()); }
+                catch (Exception error) { RodLog.fail("clara", error.getMessage()); }
+            });
+        }
     }
 
     @Override protected void onResume() {

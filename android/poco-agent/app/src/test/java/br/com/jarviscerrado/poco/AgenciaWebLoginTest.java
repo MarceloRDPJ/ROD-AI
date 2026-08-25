@@ -57,6 +57,11 @@ public class AgenciaWebLoginTest {
     }
 
     @Test
+    public void legacyEightDigitGoUnitIsSentExactlyAsPrinted() {
+        assertEquals("12345678", AgenciaWebLogin.unit("12.345.678"));
+    }
+
+    @Test
     public void anAlreadyLongUnitIsNeverTruncated() {
         // Cortar identificador e consultar a conta de outra pessoa. Melhor o
         // portal recusar o valor do cofre do que o ROD acertar a conta errada.
@@ -101,6 +106,7 @@ public class AgenciaWebLoginTest {
         assertFalse(AgenciaWebLogin.ready(null, null));
         assertFalse(AgenciaWebLogin.ready("123", "12345678901"));
         assertTrue(AgenciaWebLogin.ready(FAKE_CPF, "12345678901"));
+        assertTrue(AgenciaWebLogin.ready(FAKE_CPF, "12345678"));
     }
 
     // ------------------------------------------------- desfecho
@@ -203,6 +209,22 @@ public class AgenciaWebLoginTest {
         assertEquals("goias.equatorialenergia.com.br", AgenciaWebLogin.BILL_HOST);
         assertFalse(AgenciaWebLogin.LOGIN_URL.contains(AgenciaWebLogin.BILL_HOST));
     }
+
+    @Test
+    public void officialAppReadContractIsGoiasAndReadOnly() {
+        // Contrato conferido no APK oficial instalado, sem unidade real. A rota
+        // só lista faturas em aberto; não aponta para checkout nem pagamento.
+        assertEquals("https://api06.equatorialenergia.com.br/bff-go",
+            EquatorialWebEngine.GO_APP_BFF);
+        assertEquals("/api/v1/faturas/em-aberto/",
+            EquatorialWebEngine.GO_OPEN_BILLS_PATH);
+        assertEquals("/api/v1/debitos/", EquatorialWebEngine.GO_DEBTS_PATH);
+        assertEquals("/api/v2/clientes/", EquatorialWebEngine.GO_CUSTOMER_ACCOUNTS_PATH);
+        assertEquals("/api/v1/instalacao/", EquatorialWebEngine.GO_INSTALLATION_PATH);
+        assertFalse(EquatorialWebEngine.GO_OPEN_BILLS_PATH.contains("pagamento"));
+        assertFalse(EquatorialWebEngine.GO_OPEN_BILLS_PATH.contains("checkout"));
+    }
+
 
     // ------------------------------------------------- vocabulario do relatorio
 
@@ -341,7 +363,8 @@ public class AgenciaWebLoginTest {
         // duas deixaria a segunda inalcancavel, porque a primeira e prefixo dela.
         assertEquals("nao ha debito", AgenciaWebLogin.debtNotice(
             "no momento nao ha debitos para esta unidade"));
-        assertEquals("em dia", AgenciaWebLogin.debtNotice("sua conta esta em dia"));
+        assertEquals("sua conta esta em dia", AgenciaWebLogin.debtNotice("sua conta esta em dia"));
+        assertEquals("", AgenciaWebLogin.debtNotice("programa energia em dia"));
         assertEquals("", AgenciaWebLogin.debtNotice("seu debito vence em 10 dias"));
         assertEquals("", AgenciaWebLogin.debtNotice(null));
     }

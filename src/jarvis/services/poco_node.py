@@ -22,6 +22,7 @@ ALLOWED_ACTIONS = frozenset(
         "network_check",
         "read_bill_cache",
         "refresh_equatorial_bills",
+        "clara_equatorial_bills",
         "refresh_saneago_bills",
         # Artefatos sob demanda de uma fatura já consultada. Nenhuma das duas
         # paga, confirma ou movimenta nada: uma devolve o Pix copia e cola, a

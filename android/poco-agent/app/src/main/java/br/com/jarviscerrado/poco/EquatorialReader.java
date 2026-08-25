@@ -78,14 +78,59 @@ final class EquatorialReader {
         if (unit.isEmpty())
             throw new IllegalStateException("Unidade consumidora da Equatorial nao configurada para " + normalized);
 
-        EquatorialSession session = new EquatorialSession(!unit.isEmpty() && !document.isEmpty());
         long deadline = System.currentTimeMillis() + JOB_BUDGET_MILLIS;
 
         PowerManager.WakeLock wake = context.getSystemService(PowerManager.class).newWakeLock(
             PowerManager.SCREEN_BRIGHT_WAKE_LOCK | PowerManager.ACQUIRE_CAUSES_WAKEUP, "rod:equatorial-read");
         wake.acquire(SCREEN_BUDGET_MILLIS);
         try {
-            JSONObject result = drive(context, session, unit, document, deadline);
+            // A Agência Web emite o mesmo JWT consumido pelo aplicativo oficial.
+            // Este é agora o caminho principal: evita abrir o Chrome, selecionar
+            // imóvel por coordenada e recarregar quatro vezes uma página legada
+            // antes de tentar a fonte estruturada que realmente contém a fatura.
+            JSONObject result;
+            try {
+                result = EquatorialWebEngine.readDebtsAgenciaWeb(
+                    context, unit, document, deadline);
+            } catch (IllegalStateException appApiError) {
+                String message = appApiError.getMessage() == null
+                    ? "" : appApiError.getMessage();
+                // O login do site e o login OTP do aplicativo têm emissores
+                // diferentes. Se o BFF exigir o token OTP, o Chrome continua
+                // sendo um canal oficial válido: UC + CPF, sem depender de SMS.
+                if (!message.contains("EQUATORIAL_AUTH_REQUIRED")) throw appApiError;
+                if (unit.length() <= 8) {
+                    try {
+                        RodLog.step("canal", "UC legada: tentando primeiro a Agencia Virtual historica");
+                        result = drive(context, new EquatorialSession(!document.isEmpty()),
+                            unit, document, deadline);
+                        return result.put("property", normalized).put("read_only", true);
+                    } catch (IllegalStateException legacyPortalError) {
+                        RodLog.fail("canal", "Agencia Virtual historica nao concluiu; seguindo canais atuais");
+                    }
+                }
+                RodLog.step("canal", "BFF exige sessao OTP; usando Agencia Web no Chrome real");
+                // O mesmo formulário do go.* foi recusado no WebView pelo
+                // reCAPTCHA por pontuação. No Chrome real ele roda com o
+                // navegador completo do aparelho. Não voltar ao ASPX aqui: esse
+                // portal já foi medido recarregando indefinidamente e consumia o
+                // restante do job sem acrescentar uma terceira resposta.
+                try {
+                    result = dispatch(context, "chrome_go_equatorial",
+                        null, null, normalized);
+                } catch (IllegalStateException chromeError) {
+                    String chromeMessage = chromeError.getMessage() == null
+                        ? "" : chromeError.getMessage();
+                    // Identificador legado curto não é convertido por heurística.
+                    // A Clara aceita a UC como o cliente a conhece e é o próximo
+                    // canal da cadeia no Pi, portanto encerre este provedor cedo
+                    // para preservar o orçamento da conversa oficial.
+                    if (unit.length() <= 8)
+                        throw new IllegalStateException(
+                            "EQUATORIAL_AUTH_REQUIRED: identificador legado requer canal Clara");
+                    throw chromeError;
+                }
+            }
             result.put("property", normalized).put("read_only", true);
             return result;
         } finally {
@@ -149,6 +194,11 @@ final class EquatorialReader {
                             ? portalUnit(unit) : unit,
                         document);
                     break;
+                case WAIT:
+                    // O formulário pode continuar na tela durante o POST. Apenas
+                    // observar: nunca transformar ausência de veredito em reenvio.
+                    observation = call(context, "session_equatorial", null, null);
+                    break;
                 case RELOAD_ROUTE:
                     observation = callMode(context, "recover_equatorial", "reload");
                     break;
@@ -160,8 +210,9 @@ final class EquatorialReader {
                     if (System.currentTimeMillis() + WEBVIEW_MIN_MILLIS > deadline)
                         throw new IllegalStateException(
                             EquatorialSession.errorFor(EquatorialSession.Decision.FAIL_EXHAUSTED));
-                    RodLog.step("sessao", "trocando para o motor WebView do ROD");
-                    return EquatorialWebEngine.read(context, unit, document, deadline);
+                    RodLog.step("sessao", "trocando para a API do aplicativo oficial via sessao WebView");
+                    return EquatorialWebEngine.readDebtsAgenciaWeb(
+                        context, unit, document, deadline);
                 default:
                     throw new IllegalStateException(EquatorialSession.errorFor(decision));
             }

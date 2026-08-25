@@ -63,6 +63,8 @@ final class EquatorialSession {
         PROCEED,
         /** Autenticar com as credenciais do cofre. */
         LOGIN,
+        /** Aguardar o veredito do envio atual, sem reenviar credenciais. */
+        WAIT,
         /** Recarregar a rota autenticada no mesmo lugar. */
         RELOAD_ROUTE,
         /** Encerrar a sessão do portal e reabrir a rota, sem tocar em dados do Chrome. */
@@ -83,7 +85,7 @@ final class EquatorialSession {
 
     /** Duas, e não mais: a terceira já seria insistência contra a conta do dono. */
     static final int MAX_LOGIN_ATTEMPTS = 2;
-    /** Reaparições transitórias do formulário depois do envio (reload do portal). */
+    /** Observações transitórias permitidas depois de um único envio. */
     static final int MAX_TRANSIENT_REFILLS = 4;
     /** Recarregar, e depois reabrir. Além disso o problema não é o navegador. */
     static final int MAX_BROWSER_RECOVERIES = 2;
@@ -130,13 +132,13 @@ final class EquatorialSession {
                 return Decision.FAIL_HUMAN_CHECK;
             case LOGIN_IN_PROGRESS:
                 if (!credentialsAvailable) return Decision.FAIL_NO_CREDENTIALS;
-                // O portal de Goiás às vezes recarrega o próprio formulário
-                // depois do envio sem exibir recusa. Isso não é uma credencial
-                // errada: é uma etapa transitória. Repreenchemos de forma
-                // limitada e paramos imediatamente se surgir recusa ou CAPTCHA.
+                // O portal histórico mantém os campos visíveis enquanto processa
+                // o POST. Reenviar aqui duplica a requisição e pode bloquear uma
+                // credencial legítima. Portanto cada reaparição apenas consome uma
+                // espera limitada; LOGIN só pode nascer de SESSION_EXPIRED.
                 if (transientRefills < MAX_TRANSIENT_REFILLS) {
                     transientRefills++;
-                    return Decision.LOGIN;
+                    return Decision.WAIT;
                 }
                 if (!webViewTried) return Decision.FALLBACK_WEBVIEW;
                 return Decision.FAIL_EXHAUSTED;
