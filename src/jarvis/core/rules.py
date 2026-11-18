@@ -16,28 +16,6 @@ from typing import Dict, Optional
 import re
 
 
-# Cobrança + energia na mesma frase, com folga para erro de digitação nas duas
-# metades. Sem a primeira metade, "consumo de energia" (outra skill) seria roubado.
-_ENERGY_QUERY_RE = re.compile(
-    r"\b(?:cont[ao]s?|fatur[ao]s?|bolet[oa]s?|consult\w*|segunda\s+via)\b"
-    r"[\s\w]{0,14}?"
-    r"\b(?:lu[sz]|luiz|energia|enegia|energa|eletric\w*|eletrecidade|equator\w*)\b"
-)
-
-
-def _bill_property(text: str) -> str:
-    """Return the stable property key used by the Poco encrypted vault."""
-    if re.search(r"\bkitnet\s*0?1\b", text):
-        return "kitnet_01"
-    if re.search(r"\bkitnet\s*0?2\b", text):
-        return "kitnet_02"
-    if "sala comercial" in text or re.search(r"\bsala\b", text):
-        return "sala_comercial"
-    if "restaurante" in text:
-        return "restaurante"
-    return "casa"
-
-
 def apply_rules(text: str) -> Optional[Dict]:
     """
     Analisa texto normalizado e retorna um intent estruturado
@@ -138,30 +116,6 @@ def apply_rules(text: str) -> Optional[Dict]:
             "confidence": 1.0,
         }
 
-    if "ajuda reiniciar" in t:
-        return {
-            "intent": "chat",
-            "action": "reply",
-            "entity": "help",
-            "params": {"response": "🔄 Para reiniciar o Raspberry: `reiniciar sistema`. Para AdGuard: `reiniciar adguard`. Ambos pedem confirmação."},
-            "confidence": 1.0,
-        }
-
-    if "ajuda equatorial" in t:
-        return {
-            "intent": "chat",
-            "action": "reply",
-            "entity": "bill",
-            "params": {"response": (
-                "⚡ Equatorial: peça pelo nome do imóvel, por exemplo conta de luz casa. "
-                "A leitura roda no Poco pelo portal oficial e devolve valor, referência e "
-                "vencimento, com botões de Pix copia e cola, boleto em PDF e atualizar. "
-                "Nenhum pagamento é iniciado por mim. Se o portal exigir verificação humana, "
-                "eu aviso — e nada é pago."
-            )},
-            "confidence": 1.0,
-        }
-
     if t == "agora nao":
         return {
             "intent": "chat",
@@ -187,9 +141,6 @@ def apply_rules(text: str) -> Optional[Dict]:
 
     if "menu_sistema" in t or "menu sistema" in t or "opcoes do sistema" in t:
         return {"intent": "menu_sistema", "action": "show", "entity": "system", "confidence": 1.0}
-
-    if "menu_contas" in t or "menu contas" in t or "contas e faturas" in t:
-        return {"intent": "menu_contas", "action": "show", "entity": "bill", "confidence": 1.0}
 
     # =====================================================
     # AUTOMATION SPECIFICS
@@ -219,59 +170,6 @@ def apply_rules(text: str) -> Optional[Dict]:
             "action": "check",
             "entity": "system",
             "confidence": 1.0,
-        }
-
-    # =====================================================
-    # RESTART ADGUARD (DNS / INTERNET)
-    # =====================================================
-    if re.search(r"\b(reiniciar|restart|reboot)\b.*\b(adguard|dns)\b", t):
-        return {
-            "intent": "system_restart_adguard",
-            "action": "request",
-            "entity": "container",
-            "requires_confirmation": True,
-            "confidence": 0.95,
-        }
-
-    # =====================================================
-    # POCO ANDROID NODE — READ-ONLY QUERIES
-    # =====================================================
-    if t in ("status do poco", "status poco", "como ta o poco", "como esta o poco", "bateria do poco"):
-        return {"intent": "poco_status", "action": "check", "entity": "poco", "confidence": 1.0}
-
-    if t in ("internet pelo poco", "teste internet pelo poco", "testar internet no poco", "rede do poco"):
-        return {"intent": "poco_network_check", "action": "check", "entity": "poco", "confidence": 1.0}
-
-    water_query = any(term in t for term in ("conta de agua", "conta d agua", "fatura saneago", "consultar saneago", "conta saneago"))
-    if water_query:
-        return {
-            "intent": "saneago_bills", "action": "read", "entity": "bill",
-            "params": {"property": _bill_property(t)}, "confidence": 1.0,
-        }
-
-    energy_query = any(term in t for term in ("conta de luz", "conta de energia", "fatura equatorial", "consultar equatorial", "conta equatorial"))
-    # Consulta não tem efeito colateral: vale tolerar a digitação real do dono
-    # ("conta de lus", "fatura da equatorail") sem afrouxar nada perigoso. A regra
-    # exige as duas peças — um substantivo de cobrança E a palavra de energia —
-    # justamente para "a conta da padaria ficou cara" continuar não casando.
-    if not energy_query:
-        energy_query = bool(_ENERGY_QUERY_RE.search(t))
-    if energy_query:
-        return {
-            "intent": "equatorial_bills", "action": "read", "entity": "bill",
-            "params": {"property": _bill_property(t)}, "confidence": 1.0,
-        }
-
-    # =====================================================
-    # REBOOT (AÇÃO PERIGOSA → CONFIRMAÇÃO OBRIGATÓRIA)
-    # =====================================================
-    if re.search(r"\b(reiniciar|reboot|reinicia o sistema)\b", t):
-        return {
-            "intent": "system_reboot",
-            "action": "request",
-            "entity": "system",
-            "requires_confirmation": True,
-            "confidence": 0.95,
         }
 
     # =====================================================
@@ -463,18 +361,6 @@ def apply_rules(text: str) -> Optional[Dict]:
             "action": "update",
             "entity": "hydration",
             "params": {"value": val, "text": t},
-            "confidence": 1.0,
-        }
-
-    # =====================================================
-    # FAN / VENTOINHA
-    # =====================================================
-    if re.search(r"\b(fan|ventoinha|cooler|ventilador)\b", t):
-        return {
-            "intent": "fan_control",
-            "action": "control",
-            "entity": "fan",
-            "params": {"text": t},
             "confidence": 1.0,
         }
 

@@ -42,6 +42,48 @@ async def test_network_wake_on_lan_existe():
     with patch('wakeonlan.send_magic_packet'):
         result = await NetworkModule.wake_on_lan("AA:BB:CC:DD:EE:FF")
         assert result['success'] == True, "Deveria aceitar MAC válido"
+        assert "AA:BB:CC:DD:EE:FF" not in result['message']
+
+
+@pytest.mark.asyncio
+async def test_executor_confirma_wol_sem_expor_mac(monkeypatch):
+    """Identificador de rede privado não deve aparecer no Telegram."""
+    from jarvis.core.executor import Executor
+    from jarvis.config import Config
+
+    monkeypatch.setattr(Config, "ALLOWED_USER_ID", 1, raising=False)
+    monkeypatch.setattr(Config, "PC_MAC", "AA:BB:CC:DD:EE:FF", raising=False)
+    executor = Executor(MagicMock())
+
+    text = await executor.execute(
+        {"intent": "wake_pc", "action": "request", "params": {}},
+        chat_id=1,
+    )
+
+    assert "confirmar" in text.lower()
+    assert Config.PC_MAC not in text
+
+
+@pytest.mark.asyncio
+async def test_pc_status_uses_config_but_does_not_expose_private_ip(monkeypatch):
+    from jarvis.core.executor import Executor
+    from jarvis.config import Config
+
+    monkeypatch.setattr(Config, "ALLOWED_USER_ID", 1, raising=False)
+    monkeypatch.setattr(Config, "PC_IP", "192.168.1.50", raising=False)
+    monkeypatch.setattr(
+        "jarvis.core.executor.NetworkModule.check_device_online",
+        AsyncMock(return_value=True),
+    )
+    executor = Executor(MagicMock())
+
+    text = await executor.execute(
+        {"intent": "pc_status", "action": "check", "params": {}},
+        chat_id=1,
+    )
+
+    assert "ONLINE" in text
+    assert Config.PC_IP not in text
 
 @pytest.mark.asyncio
 async def test_executor_valida_chat_id():

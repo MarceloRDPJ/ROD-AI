@@ -4,7 +4,6 @@ import pytest
 
 from jarvis.core.events import Event
 from jarvis.database.persistence import Persistence
-from jarvis.services.energy import EnergyService
 
 
 def test_event_timestamp_is_timezone_aware_utc():
@@ -15,34 +14,23 @@ def test_event_timestamp_is_timezone_aware_utc():
     assert parsed.utcoffset() == timedelta(0)
 
 
-def test_energy_sample_is_persisted_as_event(monkeypatch):
-    monkeypatch.setattr(EnergyService, "_estimate_current_watts", lambda: 4.2)
-
-    EnergyService.log_energy_sample()
-
-    events = Persistence.get_events_by_type("energy.sample", limit=10)
-    assert len(events) == 1
-    assert events[0]["source"] == "energy"
-    assert events[0]["payload"]["watts"] == 4.2
-
-
 def test_get_events_by_type_filters_since():
     old_event = Event(
-        type="energy.sample",
+        type="telemetry.sample",
         source="test",
         payload={"watts": 1},
         timestamp=(datetime.now(timezone.utc) - timedelta(days=2)).isoformat(),
     )
-    new_event = Event(type="energy.sample", source="test", payload={"watts": 2})
+    new_event = Event(type="telemetry.sample", source="test", payload={"value": 2})
     Persistence.log_event(old_event)
     Persistence.log_event(new_event)
 
     events = Persistence.get_events_by_type(
-        "energy.sample",
+        "telemetry.sample",
         since=datetime.now(timezone.utc) - timedelta(days=1),
     )
 
-    assert [event["payload"]["watts"] for event in events] == [2]
+    assert [event["payload"]["value"] for event in events] == [2]
 
 
 @pytest.mark.asyncio
@@ -61,13 +49,12 @@ async def test_api_recent_events_reads_events_not_snapshots():
 
 
 @pytest.mark.asyncio
-async def test_health_reports_local_skills_mode_without_llm_probe():
+async def test_health_reports_local_skills_mode():
     from jarvis.api import app as api_app
 
     response = await api_app.get_system_health()
 
     assert response["checks"]["database"]["ok"] is True
-    assert "local_llm" not in response["checks"]
     assert response["assistant"] == {
         "name": "ROD", "mode": "local_skills", "generative_ai": False
     }
@@ -88,19 +75,3 @@ async def test_dashboard_endpoint_returns_payload(monkeypatch):
 
     assert response is not None
     assert response.status_code == 200
-
-
-@pytest.mark.asyncio
-async def test_mcp_resource_endpoint_reads_resource(monkeypatch):
-    from types import SimpleNamespace
-    from jarvis.api import app as api_app
-
-    async def get_resource(uri):
-        return {"uri": uri, "data": {"ok": True}}
-
-    monkeypatch.setattr(api_app, "get_service", lambda name: SimpleNamespace(get_resource=get_resource))
-
-    response = await api_app.get_mcp_resource("jarvis://system/status")
-
-    assert response["uri"] == "jarvis://system/status"
-    assert response["data"]["ok"] is True

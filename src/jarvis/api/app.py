@@ -1,944 +1,360 @@
-"""
-ROD do Cerrado — Web Dashboard API
-=====================================
-Painel de controle completo estilo Iron Man.
-Gerencia: sistema, fan, bot personality, webhooks, MCP, integrações.
+"""ROD do Cerrado — API operacional do Raspberry Pi.
+
+A API expõe somente capacidades verificadas no hardware atual: autenticação do
+painel, saúde do serviço, telemetria do Pi, rede, hidratação, automações locais e
+eventos. Integrações experimentais e hardware ausente não fazem parte deste
+contrato.
 """
 
+import hmac
 import logging
-import json
 import os
 import time
-from typing import Dict, Any, List, Optional
-from dataclasses import asdict
-from fastapi import FastAPI, HTTPException, Query, Body, Request
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from typing import Any
+
+from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi.openapi.utils import get_openapi
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+from jarvis.api.dashboard_auth import DashboardAuth
+
 logger = logging.getLogger("api")
 
-# ──────────────────────────────────────────────
-# FastAPI App
-# ──────────────────────────────────────────────
-app = FastAPI(title="ROD do Cerrado — Control Center")
+app = FastAPI(title="ROD do Cerrado", version="1.0")
+DASHBOARD_COOKIE = "rod_dashboard_session"
+UNSAFE_HTTP_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 
-# ──────────────────────────────────────────────
-# Static Files
-# ──────────────────────────────────────────────
 static_dir = os.path.join(os.path.dirname(__file__), "static")
 if os.path.exists(static_dir):
     app.mount("/static", StaticFiles(directory=static_dir), name="static")
 
-# ──────────────────────────────────────────────
-# Injected Services (set by main.py)
-# ──────────────────────────────────────────────
-# app.state.fan_service
-# app.state.bot_app
-# app.state.personality_service
-# app.state.webhook_manager
-# app.state.mcp_handler
-# app.state.integration_engine
-# app.state.automation_service
 
+class DashboardLogin(BaseModel):
+    username: str = Field(min_length=1, max_length=80)
+    password: str = Field(min_length=1, max_length=256)
 
-# ===================================================================
-# MODELS
-# ===================================================================
-
-class FanConfig(BaseModel):
-    mode: str = "auto"  # auto, manual, pwm
-    speed_percent: int = 50  # 0-100 (PWM)
-    threshold_on: float = 60.0
-    threshold_off: float = 50.0
-    curve_points: Optional[List[Dict[str, float]]] = None
-
-class PersonalityEntry(BaseModel):
-    category: str
-    key: str
-    responses: List[str]
-
-class WebhookConfig(BaseModel):
-    id: Optional[str] = None
-    name: str
-    url: str
-    events: List[str]
-    active: bool = True
-    secret: Optional[str] = None
-
-class IntegrationConfig(BaseModel):
-    id: Optional[str] = None
-    name: str
-    type: str  # workflow, chatbot, webhook, custom
-    config: Dict[str, Any] = {}
-    active: bool = True
-
-class BotSettings(BaseModel):
-    language: str = "pt-BR"
-    tone: str = "casual"  # casual, formal, tech, humorous
-    quiet_hours_start: str = "22:00"
-    quiet_hours_end: str = "08:00"
-    auto_greeting: bool = True
-    notification_level: str = "normal"  # minimal, normal, verbose
-
-
-class PocoJobRequest(BaseModel):
-    action: str
-    params: Dict[str, Any] = Field(default_factory=dict)
-    ttl_seconds: int = 180
-
-
-# ===================================================================
-# HELPERS
-# ===================================================================
 
 def get_service(name: str):
-    """Get an injected service or return None."""
     return getattr(app.state, name, None)
 
+
 def service_required(name: str):
-    """Decorator to check if a service is available."""
     service = get_service(name)
     if not service:
         raise HTTPException(status_code=503, detail=f"Service '{name}' not available")
     return service
 
 
-def get_poco_service():
-    service = get_service("poco_service")
-    if service:
-        return service
+def get_dashboard_auth() -> DashboardAuth:
+    auth = get_service("dashboard_auth")
+    if auth:
+        return auth
+
     from jarvis.config import Config
-    from jarvis.services.poco_node import PocoNodeService
-    storage = os.path.join(os.path.dirname(__file__), "..", "storage", "poco_node.json")
-    service = PocoNodeService(
-        storage,
-        shared_secret=Config.POCO_SHARED_SECRET,
-        signature_max_age_seconds=Config.POCO_SIGNATURE_MAX_AGE_SECONDS,
-        heartbeat_stale_seconds=Config.POCO_HEARTBEAT_STALE_SECONDS,
-        lease_seconds=Config.POCO_JOB_LEASE_SECONDS,
+
+    auth = DashboardAuth(
+        enabled=Config.DASHBOARD_AUTH_ENABLED,
+        username=Config.DASHBOARD_USERNAME,
+        password_hash=Config.DASHBOARD_PASSWORD_HASH,
+        session_secret=Config.DASHBOARD_SESSION_SECRET,
+        session_ttl_seconds=Config.DASHBOARD_SESSION_TTL_SECONDS,
     )
-    app.state.poco_service = service
-    return service
+    app.state.dashboard_auth = auth
+    if auth.enabled and not auth.configured:
+        logger.critical(
+            "Dashboard/API bloqueado: configure DASHBOARD_PASSWORD_HASH e "
+            "DASHBOARD_SESSION_SECRET"
+        )
+    return auth
 
 
-def get_artifact_store():
-    """Guarda temporária dos artefatos binários vindos do nó Android.
+def _dashboard_request_is_public(path: str, method: str) -> bool:
+    del method
+    return path in {
+        "/login",
+        "/api/auth/login",
+        "/api/auth/status",
+        "/api/system/health",
+        "/favicon.ico",
+    } or path.startswith("/static/")
 
-    Fica fora de ``poco_node.json`` de propósito: aquele arquivo é JSON, é lido
-    por outros caminhos do sistema e não tem prazo por campo. Boleto é conteúdo
-    binário do proprietário e merece canal próprio, com TTL curto e sem
-    listagem.
-    """
-    service = get_service("artifact_store")
-    if service:
-        return service
+
+@app.middleware("http")
+async def protect_dashboard_api(request: Request, call_next):
+    auth = get_dashboard_auth()
+    path = request.url.path
+    method = request.method.upper()
+
+    if not auth.enabled or _dashboard_request_is_public(path, method):
+        response = await call_next(request)
+    elif not auth.configured:
+        if path == "/":
+            response = RedirectResponse("/login", status_code=307)
+        else:
+            response = JSONResponse(
+                {"detail": "Dashboard authentication is enabled but not configured"},
+                status_code=503,
+            )
+    else:
+        session = auth.read_session(request.cookies.get(DASHBOARD_COOKIE))
+        if session is None:
+            if path == "/":
+                response = RedirectResponse("/login", status_code=307)
+            else:
+                response = JSONResponse({"detail": "Authentication required"}, status_code=401)
+        elif method in UNSAFE_HTTP_METHODS and not hmac.compare_digest(
+            request.headers.get("X-CSRF-Token", "").encode("utf-8"),
+            session.csrf_token.encode("ascii"),
+        ):
+            response = JSONResponse({"detail": "Invalid CSRF token"}, status_code=403)
+        else:
+            request.state.dashboard_session = session
+            response = await call_next(request)
+
+    response.headers.setdefault("Cache-Control", "no-store")
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.setdefault("Referrer-Policy", "same-origin")
+    return response
+
+
+def custom_openapi():
+    if app.openapi_schema:
+        return app.openapi_schema
+    schema = get_openapi(
+        title=app.title,
+        version=app.version,
+        routes=app.routes,
+    )
+    schema.setdefault("components", {}).setdefault("securitySchemes", {})[
+        "DashboardSession"
+    ] = {
+        "type": "apiKey",
+        "in": "cookie",
+        "name": DASHBOARD_COOKIE,
+    }
+    for path, operations in schema.get("paths", {}).items():
+        for method, operation in operations.items():
+            if method.upper() in {"GET", "POST", "PUT", "PATCH", "DELETE"}:
+                if not _dashboard_request_is_public(path, method.upper()):
+                    operation["security"] = [{"DashboardSession": []}]
+    app.openapi_schema = schema
+    return schema
+
+
+app.openapi = custom_openapi
+
+
+@app.get("/login", response_class=HTMLResponse, include_in_schema=False)
+async def serve_login():
+    login_path = os.path.join(static_dir, "login.html")
+    if os.path.exists(login_path):
+        return FileResponse(login_path, media_type="text/html")
+    return HTMLResponse("<h1>ROD</h1><p>Tela de login ausente.</p>", status_code=503)
+
+
+@app.get("/api/auth/status")
+async def dashboard_auth_status(request: Request):
+    auth = get_dashboard_auth()
+    session = (
+        auth.read_session(request.cookies.get(DASHBOARD_COOKIE))
+        if auth.configured
+        else None
+    )
+    return {
+        "enabled": auth.enabled,
+        "configured": auth.configured,
+        "authenticated": session is not None,
+        "csrf_token": session.csrf_token if session else None,
+        "expires_at": session.expires_at if session else None,
+    }
+
+
+@app.post("/api/auth/login")
+async def dashboard_login(payload: DashboardLogin, request: Request):
     from jarvis.config import Config
-    from jarvis.services.artifact_store import ArtifactStore
 
-    directory = os.path.join(os.path.dirname(__file__), "..", "storage", "artifacts")
-    service = ArtifactStore(
-        directory,
-        max_bytes=int(getattr(Config, "POCO_ARTIFACT_MAX_BYTES", 3 * 1024 * 1024)),
-        ttl_seconds=int(getattr(Config, "POCO_ARTIFACT_TTL_SECONDS", 300)),
+    auth = get_dashboard_auth()
+    if not auth.enabled:
+        return {"status": "disabled"}
+    if not auth.configured:
+        raise HTTPException(status_code=503, detail="Dashboard authentication is not configured")
+
+    client_key = request.client.host if request.client else "unknown"
+    if not auth.login_allowed(client_key):
+        raise HTTPException(status_code=429, detail="Muitas tentativas; aguarde alguns minutos")
+    if not auth.credentials_match(payload.username, payload.password):
+        auth.record_login_failure(client_key)
+        raise HTTPException(status_code=401, detail="Usuário ou senha inválidos")
+
+    auth.clear_login_failures(client_key)
+    token, session = auth.issue_session()
+    response = JSONResponse(
+        {
+            "status": "ok",
+            "csrf_token": session.csrf_token,
+            "expires_at": session.expires_at,
+        }
     )
-    app.state.artifact_store = service
-    return service
+    response.set_cookie(
+        DASHBOARD_COOKIE,
+        token,
+        max_age=auth.session_ttl_seconds,
+        httponly=True,
+        secure=Config.DASHBOARD_COOKIE_SECURE,
+        samesite="strict",
+        path="/",
+    )
+    return response
 
 
-# ===================================================================
-# ROOT / DASHBOARD
-# ===================================================================
+@app.post("/api/auth/logout")
+async def dashboard_logout():
+    response = JSONResponse({"status": "ok"})
+    response.delete_cookie(DASHBOARD_COOKIE, path="/", samesite="strict")
+    return response
+
 
 @app.get("/", response_class=HTMLResponse)
 async def serve_dashboard():
     index_path = os.path.join(static_dir, "index.html")
     if os.path.exists(index_path):
-        with open(index_path, "r", encoding="utf-8") as f:
-            return HTMLResponse(content=f.read())
-    return HTMLResponse(
-        content="<h1>ROD Dashboard UI not found</h1><p>Run the build or check static/ directory.</p>",
-        status_code=404,
-    )
+        return FileResponse(index_path, media_type="text/html")
+    return HTMLResponse("<h1>ROD</h1><p>Dashboard ausente.</p>", status_code=503)
 
-
-# ===================================================================
-# SYSTEM
-# ===================================================================
 
 @app.get("/api/system/status")
 async def get_system_status():
-    """Full system status: CPU, RAM, Disk, Temp, Uptime, Processes."""
+    from jarvis.modules.system import SystemModule
+
     try:
-        from jarvis.modules.system import SystemModule
-        raw = await SystemModule.get_raw_status()
-        return JSONResponse(content=raw)
-    except Exception as e:
-        logger.error(f"System status error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        return JSONResponse(content=await SystemModule.get_raw_status())
+    except Exception as exc:
+        logger.exception("Falha ao coletar status do Pi")
+        raise HTTPException(status_code=500, detail="System status unavailable") from exc
 
 
 @app.get("/api/system/health")
 async def get_system_health():
-    """Quick health check."""
     from jarvis.database.persistence import Persistence
-    checks = {}
+
+    checks: dict[str, dict[str, Any]] = {}
     try:
         Persistence.get_recent_events(1)
         checks["database"] = {"ok": True}
-    except Exception as e:
-        checks["database"] = {"ok": False, "error": str(e)}
-    status = "ok" if checks["database"]["ok"] else "critical"
+    except Exception as exc:
+        checks["database"] = {"ok": False, "error": type(exc).__name__}
+
+    status = "ok" if all(check["ok"] for check in checks.values()) else "critical"
     return {
         "status": status,
         "timestamp": time.time(),
         "checks": checks,
-        "assistant": {"name": "ROD", "mode": "local_skills", "generative_ai": False},
+        "assistant": {
+            "name": "ROD",
+            "mode": "local_skills",
+            "generative_ai": False,
+        },
     }
 
 
-# ===================================================================
-# POCO ANDROID NODE
-# ===================================================================
-
-async def _authenticate_poco(request: Request, body: bytes):
-    from jarvis.services.poco_node import PocoAuthenticationError
-    service = get_poco_service()
-    try:
-        service.authenticate(
-            request.headers.get("X-Poco-Timestamp"),
-            request.headers.get("X-Poco-Signature"),
-            request.method,
-            request.url.path,
-            body,
-        )
-    except PocoAuthenticationError as exc:
-        raise HTTPException(status_code=401, detail=str(exc)) from exc
-    return service
-
-
-@app.get("/api/poco/status")
-async def poco_status():
-    return get_poco_service().status()
-
-
-@app.post("/api/poco/jobs")
-async def poco_enqueue_job(job: PocoJobRequest, request: Request):
-    if not request.client or request.client.host not in {"127.0.0.1", "::1"}:
-        raise HTTPException(status_code=403, detail="Poco jobs can only be queued locally")
-    try:
-        created = get_poco_service().enqueue(job.action, job.params, job.ttl_seconds)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return asdict(created)
-
-
-@app.post("/api/poco/heartbeat")
-async def poco_heartbeat(request: Request):
-    body = await request.body()
-    service = await _authenticate_poco(request, body)
-    try:
-        payload = json.loads(body or b"{}")
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail="Invalid JSON") from exc
-    return {"status": "ok", "heartbeat": service.record_heartbeat(payload)}
-
-
-@app.get("/api/poco/jobs/next")
-async def poco_next_job(request: Request):
-    service = await _authenticate_poco(request, b"")
-    job = service.next_job()
-    return {"job": asdict(job) if job else None}
-
-
-@app.post("/api/poco/jobs/{job_id}/state")
-async def poco_update_job(job_id: str, request: Request):
-    body = await request.body()
-    service = await _authenticate_poco(request, body)
-    try:
-        payload = json.loads(body or b"{}")
-        job = service.update_job(job_id, payload.get("status", ""), payload.get("result"), payload.get("error"))
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail="Unknown Poco job") from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return asdict(job)
-
-
-# ------------------------------------------------------------------
-# Canal de artefato (boleto PDF) — LAN, assinado, sem listagem
-# ------------------------------------------------------------------
-
-def _client_host(request: Request) -> str:
-    return request.client.host if request.client else ""
-
-
-def _is_lan(host: str) -> bool:
-    """Mesmo perímetro da arquitetura atual: nó e Pi na rede doméstica.
-
-    A lista é explícita de propósito. ``ip_address.is_private`` também aceita as
-    faixas de documentação da IANA, que não são rede local nenhuma.
-    """
-    import ipaddress
-
-    if host in {"127.0.0.1", "::1"}:
-        return True
-    try:
-        address = ipaddress.ip_address(host)
-    except ValueError:
-        return False
-    lan = (
-        "10.0.0.0/8",
-        "172.16.0.0/12",
-        "192.168.0.0/16",
-        "169.254.0.0/16",
-        "127.0.0.0/8",
-        "fc00::/7",
-        "fe80::/10",
-        "::1/128",
-    )
-    for cidr in lan:
-        network = ipaddress.ip_network(cidr)
-        if address.version == network.version and address in network:
-            return True
-    return False
-
-
-def _require_lan(request: Request, loopback_only: bool = False) -> None:
-    host = _client_host(request)
-    if loopback_only:
-        if host not in {"127.0.0.1", "::1"}:
-            raise HTTPException(status_code=403, detail="Artefato só é entregue no próprio Pi")
-        return
-    if not _is_lan(host):
-        raise HTTPException(status_code=403, detail="Canal de artefato restrito à LAN")
-
-
-def _artifact_boot_cleanup(previous):
-    """Limpa artefatos no boot, preservando o ciclo de vida que já existia.
-
-    O índice dos artefatos vive em memória, então um arquivo deixado por uma
-    execução anterior já é inalcançável; deixá-lo no disco só aumentaria a janela
-    de exposição de uma fatura do proprietário. A construção da guarda faz a
-    limpeza; isto garante que ela aconteça no boot, e não só no primeiro uso.
-    """
-    from contextlib import asynccontextmanager
-
-    @asynccontextmanager
-    async def lifespan(scope):
-        try:
-            get_artifact_store()
-        except Exception as exc:  # a limpeza não pode impedir a API de subir
-            logger.warning(f"Limpeza de artefatos no boot falhou: {exc}")
-        async with previous(scope):
-            yield
-
-    return lifespan
-
-
-app.router.lifespan_context = _artifact_boot_cleanup(app.router.lifespan_context)
-
-
-@app.post("/api/poco/artifacts")
-async def poco_upload_artifact(request: Request):
-    """Recebe o boleto PDF do nó, já autenticado no portal.
-
-    O corpo é o binário cru: enfiar PDF em base64 dentro do resultado do job
-    gravaria a fatura do proprietário em ``poco_node.json``. A assinatura HMAC é
-    a mesma dos outros endpoints do nó, calculada sobre os bytes exatos.
-    """
-    from jarvis.services.artifact_store import ArtifactError
-
-    _require_lan(request)
-    store = get_artifact_store()
-
-    declared = request.headers.get("content-length")
-    if declared and declared.isdigit() and int(declared) > store.max_bytes:
-        # Recusa antes de ler: o limite não pode depender de já ter o corpo.
-        raise HTTPException(status_code=413, detail="Artefato acima do limite deste canal")
-
-    body = await request.body()
-    await _authenticate_poco(request, body)
-    try:
-        meta = store.store(
-            body,
-            request.headers.get("X-Poco-Artifact-Mime", ""),
-            request.headers.get("X-Poco-Artifact-Kind", "boleto"),
-        )
-    except ArtifactError as exc:
-        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
-    return {"artifact_id": meta.artifact_id, "size_bytes": meta.size_bytes, "ttl_seconds": store.ttl_seconds}
-
-
-@app.get("/api/poco/artifacts/{artifact_id}")
-async def poco_download_artifact(artifact_id: str, request: Request):
-    """Resolve um id opaco. Não existe listagem, nem acesso por caminho.
-
-    A entrega consome o artefato: o consumidor legítimo é o próprio bot, no Pi,
-    e ele envia o PDF uma única vez. O que sobrar morre no TTL.
-    """
-    from starlette.background import BackgroundTask
-
-    from jarvis.services.artifact_store import ArtifactError
-
-    _require_lan(request, loopback_only=True)
-    store = get_artifact_store()
-    try:
-        path = store.resolve(artifact_id)
-        meta = store.describe(artifact_id)
-    except (ArtifactError, KeyError) as exc:
-        raise HTTPException(status_code=404, detail="Artefato inexistente ou expirado") from exc
-    return FileResponse(
-        path,
-        media_type=meta["mime"],
-        # Nome gerado aqui: o portal nunca decide como o arquivo se chama.
-        filename=f"{meta['kind']}-{meta['artifact_id'][:8]}.pdf",
-        background=BackgroundTask(store.consume, meta["artifact_id"]),
-    )
-
-
-@app.post("/api/system/reboot")
-async def reboot_system():
-    """Reboot the Raspberry Pi."""
-    from jarvis.modules.system import SystemModule
-    result = SystemModule.reboot_device()
-    return {"status": "success", "message": result}
-
-
-@app.get("/api/system/docker")
-async def list_docker_containers():
-    """List running Docker containers."""
-    from jarvis.modules.system import SystemModule
-    result = await SystemModule.list_docker()
-    return {"containers": result}
-
-
 @app.get("/api/system/processes")
-async def get_system_processes(limit: int = Query(20, le=100)):
-    """List top processes by CPU usage."""
+async def get_system_processes(limit: int = Query(20, ge=1, le=100)):
     import psutil
+
     processes = []
-    for proc in sorted(psutil.process_iter(['pid', 'name', 'cpu_percent', 'memory_percent']),
-                       key=lambda p: p.info['cpu_percent'] or 0, reverse=True)[:limit]:
+    candidates = psutil.process_iter(["pid", "name", "cpu_percent", "memory_percent"])
+    for proc in sorted(
+        candidates,
+        key=lambda item: item.info.get("cpu_percent") or 0,
+        reverse=True,
+    )[:limit]:
         try:
-            processes.append({
-                "pid": proc.info['pid'],
-                "name": proc.info['name'],
-                "cpu": proc.info['cpu_percent'] or 0,
-                "memory": proc.info['memory_percent'] or 0,
-            })
+            processes.append(
+                {
+                    "pid": proc.info["pid"],
+                    "name": proc.info["name"],
+                    "cpu": proc.info.get("cpu_percent") or 0,
+                    "memory": proc.info.get("memory_percent") or 0,
+                }
+            )
         except (psutil.NoSuchProcess, psutil.AccessDenied):
-            pass
+            continue
     return {"processes": processes}
 
 
 @app.get("/api/system/logs")
-async def get_system_logs(lines: int = Query(50, le=200)):
-    """Get recent system events from persistence."""
+async def get_system_logs(lines: int = Query(50, ge=1, le=200)):
     from jarvis.database.persistence import Persistence
+
     try:
-        events = Persistence.get_recent_events(lines)
-        return {"logs": events}
-    except Exception as e:
-        return {"logs": [], "error": str(e)}
+        return {"logs": Persistence.get_recent_events(lines)}
+    except Exception as exc:
+        logger.exception("Falha ao ler eventos")
+        return {"logs": [], "error": type(exc).__name__}
 
-
-# ===================================================================
-# FAN CONTROL (AVANÇADO)
-# ===================================================================
-
-@app.get("/api/fan/status")
-async def get_fan_status():
-    """Get detailed fan status with hardware info."""
-    fan_service = get_service("fan_service")
-    if not fan_service:
-        return JSONResponse(content={
-            "available": False,
-            "hardware_status": "unavailable",
-            "message": "FanControlService not initialized"
-        })
-
-    state = "on" if fan_service.fan and fan_service.fan.is_active else "off"
-    hardware_status = "ok" if fan_service.fan is not None else "simulated"
-    return JSONResponse(content={
-        "available": fan_service.fan is not None,
-        "hardware_status": hardware_status,
-        "state": state,
-        "mode": "pwm" if hasattr(fan_service, 'pwm_mode') and fan_service.pwm_mode else "onoff",
-        "speed_percent": getattr(fan_service, 'speed_percent', 100 if state == "on" else 0),
-        "manual_override": fan_service.manual_override,
-        "threshold_on": fan_service.threshold_on,
-        "threshold_off": fan_service.threshold_off,
-        "gpio_pin": fan_service.pin,
-        "current_temp": None,  # Will be filled
-    })
-
-
-@app.post("/api/fan/toggle")
-async def toggle_fan():
-    """Toggle fan on/off."""
-    fan_service = service_required("fan_service")
-    if not fan_service.fan:
-        raise HTTPException(status_code=500, detail="Fan hardware unavailable")
-
-    if fan_service.fan.is_active:
-        fan_service.fan.off()
-        fan_service.manual_override = True
-        return {"status": "success", "state": "off", "mode": "manual"}
-    else:
-        fan_service.fan.on()
-        fan_service.manual_override = True
-        return {"status": "success", "state": "on", "mode": "manual"}
-
-
-@app.post("/api/fan/speed")
-async def set_fan_speed(config: FanConfig):
-    """Set fan speed with PWM support."""
-    fan_service = service_required("fan_service")
-    if not fan_service.fan:
-        raise HTTPException(status_code=500, detail="Fan hardware unavailable")
-
-    speed = max(0, min(100, config.speed_percent))
-
-    if speed == 0:
-        fan_service.fan.off()
-    else:
-        # Try PWM if supported
-        try:
-            if hasattr(fan_service.fan, 'value'):
-                fan_service.fan.value = speed / 100.0
-                fan_service.pwm_mode = True
-                fan_service.speed_percent = speed
-            else:
-                fan_service.fan.on()
-        except Exception:
-            fan_service.fan.on()
-
-    fan_service.manual_override = (config.mode != "auto")
-    return {
-        "status": "success",
-        "speed_percent": speed,
-        "mode": config.mode if not fan_service.manual_override else "manual",
-        "state": "on" if speed > 0 else "off"
-    }
-
-
-@app.post("/api/fan/config")
-async def set_fan_config(config: FanConfig):
-    """Configure fan thresholds and curves."""
-    fan_service = service_required("fan_service")
-
-    if config.mode == "auto":
-        fan_service.manual_override = False
-    else:
-        fan_service.manual_override = True
-
-    fan_service.threshold_on = config.threshold_on
-    fan_service.threshold_off = config.threshold_off
-
-    if config.curve_points:
-        fan_service.curve_points = config.curve_points
-
-    return {
-        "status": "success",
-        "threshold_on": fan_service.threshold_on,
-        "threshold_off": fan_service.threshold_off,
-        "mode": "auto" if not fan_service.manual_override else "manual",
-        "curve_points": getattr(fan_service, 'curve_points', None)
-    }
-
-
-@app.post("/api/fan/auto")
-async def set_fan_auto():
-    """Return fan to automatic temperature-based control."""
-    fan_service = service_required("fan_service")
-    fan_service.manual_override = False
-    return {"status": "success", "mode": "auto"}
-
-
-# ===================================================================
-# BOT PERSONALITY & CONFIGURATION
-# ===================================================================
-
-@app.get("/api/bot/personality")
-async def get_personality():
-    """Get all personality categories and responses."""
-    from jarvis.core.personality import Personality
-    categories = {}
-    for attr in dir(Personality):
-        if attr.isupper() and not attr.startswith('_'):
-            val = getattr(Personality, attr)
-            if isinstance(val, list):
-                categories[attr] = val
-            elif isinstance(val, dict):
-                categories[attr] = val
-    return {"categories": categories}
-
-
-@app.post("/api/bot/personality")
-async def update_personality(entry: PersonalityEntry):
-    """Update a personality category or add new responses."""
-    from jarvis.core.personality import Personality
-    category = entry.category.upper()
-    if not hasattr(Personality, category):
-        setattr(Personality, category, [])
-    
-    current = getattr(Personality, category)
-    if isinstance(current, list):
-        if entry.key == "__replace__":
-            setattr(Personality, category, entry.responses)
-        else:
-            current.extend(entry.responses)
-            setattr(Personality, category, current)
-    elif isinstance(current, dict):
-        current[entry.key] = entry.responses
-        setattr(Personality, category, current)
-    
-    return {"status": "success", "category": category, "count": len(entry.responses)}
-
-
-@app.get("/api/bot/settings")
-async def get_bot_settings():
-    """Get current bot settings."""
-    from jarvis.config import Config
-    return {
-        "language": "pt-BR",
-        "tone": "casual",
-        "quiet_hours_start": "22:00",
-        "quiet_hours_end": "08:00",
-        "auto_greeting": True,
-        "notification_level": "normal",
-        "timezone": Config.TIMEZONE,
-        "allowed_user_id": Config.ALLOWED_USER_ID,
-        "assistant_mode": "local_skills",
-        "intent_confidence": Config.INTENT_CONFIDENCE_THRESHOLD,
-    }
-
-
-@app.post("/api/bot/settings")
-async def update_bot_settings(settings: BotSettings):
-    """Update bot settings (persisted to persistence layer)."""
-    from jarvis.database.persistence import Persistence
-    Persistence.set_state("bot_settings", settings.dict())
-    return {"status": "success", "settings": settings.dict()}
-
-
-@app.get("/api/bot/local-brain")
-async def get_local_brain():
-    """Get all local brain knowledge entries."""
-    from jarvis.nlp.local_brain import LocalBrain
-    brain = LocalBrain()
-    return {"knowledge": brain.static_kb, "count": len(brain.static_kb)}
-
-
-@app.post("/api/bot/local-brain")
-async def add_local_brain_entry(key: str = Body(...), response: str = Body(...)):
-    """Add a new entry to the local brain knowledge base."""
-    from jarvis.nlp.local_brain import LocalBrain
-    brain = LocalBrain()
-    brain.static_kb[key.lower().strip()] = [response]
-    # Persist the update
-    from jarvis.database.persistence import Persistence
-    Persistence.set_state("local_brain_custom", brain.static_kb)
-    return {"status": "success", "key": key}
-
-
-@app.get("/api/bot/intents")
-async def get_intent_rules():
-    """Get all intent mapping rules."""
-    from jarvis.nlp.intent_engine import IntentEngine
-    engine = IntentEngine()
-    return {"intents": engine.intents}
-
-
-# ===================================================================
-# NETWORK
-# ===================================================================
 
 @app.get("/api/network/scan")
 async def scan_network(depth: str = Query("standard", pattern="^(standard|deep|quick)$")):
-    """Scan the local network for devices."""
     from jarvis.modules.network import NetworkModule
+
     try:
         if depth == "deep":
             devices = await NetworkModule.scan_network_deep()
         else:
-            devices = await NetworkModule.scan_network()
+            snapshot = await NetworkModule.get_raw_snapshot()
+            devices = snapshot.get("devices", [])
         return {"devices": devices, "count": len(devices), "depth": depth}
-    except Exception as e:
-        logger.error(f"Network scan error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception as exc:
+        logger.exception("Falha ao varrer a rede")
+        raise HTTPException(status_code=500, detail="Network scan unavailable") from exc
 
 
 @app.get("/api/network/speedtest")
 async def run_speedtest():
-    """Run an internet speed test."""
     from jarvis.modules.network import NetworkModule
-    result = await NetworkModule.run_speedtest()
-    return {"result": result}
+
+    return {
+        "result": await NetworkModule.run_speedtest(),
+        "measurement_node": "raspberry_pi",
+        "ethernet_limit_mbps": 100,
+    }
 
 
 @app.get("/api/network/ping")
 async def check_ping():
-    """Check internet connectivity with ping metrics."""
     from jarvis.modules.network import NetworkModule
-    metrics = await NetworkModule.get_ping_metrics()
-    return metrics
 
+    return await NetworkModule.get_ping_metrics()
 
-# ===================================================================
-# HYDRATION
-# ===================================================================
 
 @app.get("/api/hydration/status")
 async def get_hydration_status():
-    """Get hydration status for the configured user."""
     from jarvis.config import Config
     from jarvis.modules.hydration import HydrationModule
-    chat_id = Config.ALLOWED_USER_ID
-    status = HydrationModule.get_status_message(chat_id)
-    return {"status": status}
+
+    return {"status": HydrationModule.get_status_message(Config.ALLOWED_USER_ID)}
 
 
 @app.get("/api/hydration/history")
-async def get_hydration_history(days: int = Query(30, le=90)):
-    """Get hydration history for the last N days."""
+async def get_hydration_history(days: int = Query(30, ge=1, le=90)):
     from jarvis.config import Config
     from jarvis.database.persistence import Persistence
-    chat_id = Config.ALLOWED_USER_ID
-    history = Persistence.get_hydration_history(chat_id, days)
+
+    history = Persistence.get_hydration_history(Config.ALLOWED_USER_ID, days)
     return {"history": history, "days": days, "count": len(history)}
 
 
-# ===================================================================
-# WEBHOOKS
-# ===================================================================
-
-@app.get("/api/webhooks")
-async def list_webhooks():
-    """List all registered webhooks."""
-    wm = get_service("webhook_manager")
-    if not wm:
-        return {"webhooks": []}
-    return {"webhooks": wm.list_webhooks()}
-
-
-@app.post("/api/webhooks")
-async def create_webhook(config: WebhookConfig):
-    """Register a new webhook."""
-    wm = service_required("webhook_manager")
-    webhook = wm.register_webhook(config.dict())
-    return {"status": "success", "webhook": webhook}
-
-
-@app.delete("/api/webhooks/{webhook_id}")
-async def delete_webhook(webhook_id: str):
-    """Remove a webhook."""
-    wm = service_required("webhook_manager")
-    wm.unregister_webhook(webhook_id)
-    return {"status": "success", "deleted": webhook_id}
-
-
-@app.post("/api/webhooks/{webhook_id}/test")
-async def test_webhook(webhook_id: str):
-    """Send a test event to a webhook."""
-    wm = service_required("webhook_manager")
-    result = await wm.test_webhook(webhook_id)
-    return {"status": "success" if result else "failed", "result": result}
-
-
-@app.get("/api/webhooks/logs")
-async def get_webhook_logs(limit: int = Query(50, le=200)):
-    """Get recent webhook execution logs."""
-    wm = service_required("webhook_manager")
-    return {"logs": wm.get_logs(limit)}
-
-
-# ===================================================================
-# MCP — MODEL CONTEXT PROTOCOL
-# ===================================================================
-
-@app.get("/api/mcp/tools")
-async def list_mcp_tools():
-    """List available MCP tools."""
-    mcp = get_service("mcp_handler")
-    if not mcp:
-        # Return built-in tools even without MCP handler
-        return {
-            "tools": [
-                {"name": "system_status", "description": "Get system status", "parameters": {}},
-                {"name": "network_scan", "description": "Scan network devices", "parameters": {"depth": {"type": "string"}}},
-                {"name": "fan_control", "description": "Control fan", "parameters": {"action": {"type": "string"}, "speed": {"type": "integer"}}},
-                {"name": "send_notification", "description": "Send Telegram notification", "parameters": {"message": {"type": "string"}}},
-                {"name": "run_speedtest", "description": "Run internet speed test", "parameters": {}},
-                {"name": "block_site", "description": "Block a website via AdGuard", "parameters": {"domain": {"type": "string"}}},
-                {"name": "get_hydration", "description": "Get hydration status", "parameters": {}},
-                {"name": "list_reminders", "description": "List active reminders", "parameters": {}},
-            ]
-        }
-    return {"tools": mcp.list_tools()}
-
-
-@app.post("/api/mcp/execute")
-async def execute_mcp_tool(request: Request):
-    """Execute an MCP tool."""
-    body = await request.json()
-    tool_name = body.get("tool")
-    parameters = body.get("parameters", {})
-
-    mcp = get_service("mcp_handler")
-    if mcp:
-        result = await mcp.execute_tool(tool_name, parameters)
-        return {"result": result}
-
-    # Built-in execution for common tools
-    from jarvis.modules.system import SystemModule
-    from jarvis.modules.network import NetworkModule
-
-    if tool_name == "system_status":
-        raw = await SystemModule.get_raw_status()
-        return {"result": raw}
-    elif tool_name == "network_scan":
-        devices = await NetworkModule.scan_network()
-        return {"result": {"devices": devices}}
-    elif tool_name == "run_speedtest":
-        result = await NetworkModule.run_speedtest()
-        return {"result": result}
-    elif tool_name == "send_notification":
-        bot = getattr(app.state, "bot_app", None)
-        if bot:
-            from jarvis.config import Config
-            await bot.bot.send_message(chat_id=Config.ALLOWED_USER_ID, text=parameters.get("message", ""))
-            return {"result": "Notification sent"}
-        return {"result": "Bot not available"}
-    else:
-        raise HTTPException(status_code=400, detail=f"Unknown tool: {tool_name}")
-
-
-@app.get("/api/mcp/resources")
-async def list_mcp_resources():
-    """List available MCP resources (data endpoints)."""
-    return {
-        "resources": [
-            {"uri": "jarvis://system/status", "description": "Real-time system status"},
-            {"uri": "jarvis://network/devices", "description": "Connected network devices"},
-            {"uri": "jarvis://network/stats", "description": "Network statistics from AdGuard"},
-            {"uri": "jarvis://hydration/today", "description": "Today's hydration data"},
-            {"uri": "jarvis://bot/personality", "description": "Bot personality configuration"},
-            {"uri": "jarvis://system/logs", "description": "Recent system logs"},
-        ]
-    }
-
-
-# ===================================================================
-# INTEGRATIONS (n8n-like, Typebot-like)
-# ===================================================================
-
-@app.get("/api/integrations")
-async def list_integrations():
-    """List all registered integrations."""
-    engine = get_service("integration_engine")
-    if not engine:
-        return {"integrations": []}
-    return {"integrations": engine.list_integrations()}
-
-
-@app.post("/api/integrations")
-async def create_integration(config: IntegrationConfig):
-    """Register a new integration."""
-    engine = service_required("integration_engine")
-    try:
-        integration = engine.register_integration(config.dict())
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    return {"status": "success", "integration": integration}
-
-
-@app.delete("/api/integrations/{integration_id}")
-async def delete_integration(integration_id: str):
-    """Remove an integration."""
-    engine = service_required("integration_engine")
-    engine.unregister_integration(integration_id)
-    return {"status": "success"}
-
-
-@app.post("/api/integrations/test")
-async def test_integration(request: Request):
-    """Test an integration configuration."""
-    body = await request.json()
-    engine = service_required("integration_engine")
-    errors = engine.validate_config(body)
-    if errors:
-        return {"status": "invalid", "errors": errors, "data": body}
-    return {"status": "valid", "message": "Integration config is executable by the local engine", "data": body}
-
-
-@app.get("/api/integrations/templates")
-async def list_integration_templates():
-    """List available pre-built integration templates."""
-    return {
-        "templates": [
-            {
-                "id": "night_mode",
-                "name": "Modo Noturno Automático",
-                "description": "Silencia notificações e ativa modo escuro às 22h",
-                "type": "workflow",
-                "steps": [
-                    {"type": "schedule", "config": {"time": "22:00"}},
-                    {"type": "action", "config": {"action": "quiet_hours_on"}},
-                    {"type": "notification", "config": {"message": "🌙 Modo noturno ativado"}}
-                ]
-            },
-            {
-                "id": "hydration_reminder",
-                "name": "Lembrete de Hidratação",
-                "description": "Lembra de beber água a cada 2 horas",
-                "type": "workflow",
-                "steps": [
-                    {"type": "schedule", "config": {"interval": 120}},
-                    {"type": "notification", "config": {"message": "💧 Hora de beber água!"}}
-                ]
-            },
-            {
-                "id": "welcome_message",
-                "name": "Mensagem de Boas-Vindas",
-                "description": "Envia mensagem personalizada ao detectar novo dispositivo",
-                "type": "chatbot",
-                "flows": [
-                    {"trigger": "novo dispositivo", "responses": ["Novo dispositivo detectado na rede."]}
-                ]
-            },
-            {
-                "id": "internet_alert",
-                "name": "Alerta de Internet",
-                "description": "Notifica quando a internet cai ou volta",
-                "type": "workflow",
-                "steps": [
-                    {"type": "trigger", "config": {"event": "network.status_changed"}},
-                    {"type": "condition", "config": {"field": "status", "operator": "eq", "value": "down"}},
-                    {"type": "notification", "config": {"message": "🚨 Internet caiu!"}}
-                ]
-            }
-        ]
-    }
-
-
-# ===================================================================
-# AUTOMATIONS
-# ===================================================================
-
 @app.get("/api/automations")
 async def list_automations():
-    """List all registered automations."""
     automation = get_service("automation_service")
-    if not automation:
-        return {"automations": []}
-    return {"automations": automation.rules}
+    return {"automations": automation.rules if automation else []}
 
 
 @app.post("/api/automations/{rule_id}/toggle")
 async def toggle_automation(rule_id: str):
-    """Enable/disable an automation rule."""
     automation = service_required("automation_service")
     for rule in automation.rules:
         if rule["id"] == rule_id:
@@ -947,74 +363,35 @@ async def toggle_automation(rule_id: str):
     raise HTTPException(status_code=404, detail=f"Rule {rule_id} not found")
 
 
-# ===================================================================
-# DASHBOARD DATA (Batch endpoint for Dashboard home)
-# ===================================================================
-
 @app.get("/api/dashboard")
 async def get_dashboard_data():
-    """Get all essential dashboard data in one call."""
-    from jarvis.modules.system import SystemModule
     from jarvis.config import Config
+    from jarvis.modules.network import NetworkModule
+    from jarvis.modules.system import SystemModule
 
-    data = {"timestamp": time.time()}
-
-    # System
+    data: dict[str, Any] = {"timestamp": time.time()}
     try:
         data["system"] = await SystemModule.get_raw_status()
-    except Exception as e:
-        data["system"] = {"error": str(e)}
+    except Exception as exc:
+        data["system"] = {"error": type(exc).__name__}
 
-    # Fan
-    fan_service = get_service("fan_service")
-    if fan_service and fan_service.fan:
-        data["fan"] = {
-            "available": True,
-            "state": "on" if fan_service.fan.is_active else "off",
-            "manual_override": fan_service.manual_override,
-            "threshold_on": fan_service.threshold_on,
-            "threshold_off": fan_service.threshold_off,
-        }
-    else:
-        data["fan"] = {"available": False}
-
-    # Network (quick)
     try:
-        from jarvis.modules.network import NetworkModule
-        metrics = await NetworkModule.get_ping_metrics()
-        data["internet"] = metrics
-    except Exception:
-        data["internet"] = {"success": False}
+        data["internet"] = await NetworkModule.get_ping_metrics()
+    except Exception as exc:
+        data["internet"] = {"success": False, "error": type(exc).__name__}
 
-    # Bot Info
     data["bot"] = {
         "timezone": Config.TIMEZONE,
         "assistant_mode": "local_skills",
         "generative_ai": False,
-        "user_id": Config.ALLOWED_USER_ID,
     }
-
     return JSONResponse(content=data)
 
 
-@app.get("/api/mcp/resource")
-async def get_mcp_resource(uri: str = Query(...)):
-    """Read a single MCP resource by URI."""
-    handler = service_required("mcp_handler")
-    data = await handler.get_resource(uri)
-    if data is None:
-        raise HTTPException(status_code=404, detail=f"Resource not found: {uri}")
-    return data
-
-
-# ===================================================================
-# CONFIG / SETTINGS
-# ===================================================================
-
 @app.get("/api/config")
 async def get_config():
-    """Get current configuration (sanitized - no secrets)."""
     from jarvis.config import Config
+
     return {
         "timezone": Config.TIMEZONE,
         "assistant_mode": "local_skills",
@@ -1022,38 +399,26 @@ async def get_config():
         "intent_confidence": Config.INTENT_CONFIDENCE_THRESHOLD,
         "scheduler_interval": Config.SCHEDULER_INTERVAL_SECONDS,
         "hydration_interval": Config.HYDRATION_MIN_INTERVAL_MINUTES,
-        "fan_gpio_pin": Config.FAN_GPIO_PIN,
-        "fan_temp_on": Config.FAN_TEMP_ON,
-        "fan_temp_off": Config.FAN_TEMP_OFF,
-        "pc_mac": Config.PC_MAC[:8] + ":***" if Config.PC_MAC else None,
-        "pc_ip": os.getenv("PC_IP", "192.168.0.100"),
-        "yaml_config": Config.YAML_CONFIG,
+        "wake_on_lan_configured": bool(Config.PC_MAC),
+        "pc_status_configured": bool(Config.PC_IP),
     }
 
 
-# ===================================================================
-# EVENTS / REAL-TIME
-# ===================================================================
-
 @app.get("/api/events/recent")
-async def get_recent_events(limit: int = Query(20, le=100)):
-    """Get recent system events."""
+async def get_recent_events(limit: int = Query(20, ge=1, le=100)):
     from jarvis.database.persistence import Persistence
+
     try:
-        events = Persistence.get_recent_events(limit)
-        return {"events": events}
-    except Exception as e:
-        return {"events": [], "error": str(e)}
+        return {"events": Persistence.get_recent_events(limit)}
+    except Exception as exc:
+        logger.exception("Falha ao ler eventos")
+        return {"events": [], "error": type(exc).__name__}
 
-
-# ===================================================================
-# ERROR HANDLING
-# ===================================================================
 
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
-    logger.error(f"Unhandled exception: {exc}", exc_info=True)
+    logger.error("Unhandled API exception on %s: %s", request.url.path, exc, exc_info=True)
     return JSONResponse(
         status_code=500,
-        content={"detail": "Internal server error", "type": type(exc).__name__}
+        content={"detail": "Internal server error", "type": type(exc).__name__},
     )

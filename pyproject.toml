@@ -1,52 +1,78 @@
 [build-system]
-requires = ["setuptools>=61.0"]
+requires = ["setuptools>=75,<90"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "jarvis-do-cerrado"
-version = "0.1.0"
-description = "ROD — assistente residencial e guardião de rede da RDP Studio"
-authors = [
-  { name="Marcelo", email="marcelo@example.com" },
-]
+name = "rod-do-cerrado"
+version = "1.0.0"
+description = "Assistente pessoal e guardião de rede local para Raspberry Pi"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.12,<3.13"
+license = { file = "LICENSE" }
+authors = [{ name = "Marcelo" }]
 classifiers = [
-    "Programming Language :: Python :: 3",
-    "License :: OSI Approved :: MIT License",
-    "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.12",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: POSIX :: Linux",
 ]
 dependencies = [
-    "python-telegram-bot==20.8",
-    "python-dotenv",
-    "requests",
-    "pyyaml",
-    "psutil",
-    "speedtest-cli",
-    "wakeonlan",
-    "mac-vendor-lookup",
-    "scapy",
-    "bleak",
-    "rapidfuzz",
-    "aiohttp",
-    "gpiozero",
-    "pytz",
-    "fastapi>=0.110.0",
-    "uvicorn[standard]>=0.29.0",
-    "pydantic>=2.0.0",
-    "aiofiles>=23.0.0"
+  "aiohttp>=3.10,<4",
+  "fastapi>=0.115,<1",
+  "mac-vendor-lookup>=0.1,<1",
+  "psutil>=6,<8",
+  "pydantic>=2.9,<3",
+  "python-dotenv>=1,<2",
+  "python-telegram-bot>=20.8,<21",
+  "pytz>=2024.1",
+  "PyYAML>=6,<7",
+  "rapidfuzz>=3.9,<4",
+  "requests>=2.32,<3",
+  "scapy>=2.6,<3",
+  "uvicorn[standard]>=0.30,<1",
+  "wakeonlan>=3,<5",
+]
+
+[project.optional-dependencies]
+test = [
+  "pytest>=8,<10",
+  "pytest-asyncio>=0.24,<2",
+  "pytest-cov>=5,<8",
+  "pytest-mock>=3.14,<4",
+  "ruff>=0.9,<1",
 ]
 
 [project.urls]
-"Homepage" = "https://github.com/MarceloRDPJ/MarceloRDPJ-jarvis-do-cerrado-prod"
+Homepage = "https://github.com/MarceloRDPJ/ROD-AI"
+Repository = "https://github.com/MarceloRDPJ/ROD-AI"
 
 [tool.setuptools.packages.find]
 where = ["src"]
 
-[tool.black]
-line-length = 88
-target-version = ['py310']
+[tool.setuptools.package-data]
+jarvis = ["config.yaml", "api/static/*.html"]
 
-[tool.isort]
-profile = "black"
-line_length = 88
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+exclude = ["htmlcov", ".tools", ".venv"]
+
+[tool.ruff.lint]
+# Baseline inicial: erros de sintaxe e nomes indefinidos. O débito de estilo
+# existente será reduzido em mudanças separadas, sem misturar com o runtime.
+select = ["E9", "F63", "F7", "F82"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+addopts = [
+  "--verbose",
+  "--cov=src/jarvis",
+  "--cov-report=term-missing",
+  "--cov-report=xml",
+  "--cov-fail-under=60",
+]

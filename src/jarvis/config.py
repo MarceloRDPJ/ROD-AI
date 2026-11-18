@@ -27,24 +27,6 @@ class Config:
     ALLOWED_USER_ID = int(raw_id) if raw_id.strip() else 0
 
     # ==================================================
-    # LEGACY LOCAL LLM (DISABLED IN PRODUCTION)
-    # ==================================================
-    LOCAL_LLM_ENABLED = os.getenv("LOCAL_LLM_ENABLED", "false").strip().lower() == "true"
-    LOCAL_LLM_COMMAND = os.getenv("LOCAL_LLM_COMMAND", "llama-cli")
-    LOCAL_LLM_BACKEND = os.getenv("LOCAL_LLM_BACKEND", "disabled").strip().lower()
-    LOCAL_LLM_SERVER_URL = os.getenv("LOCAL_LLM_SERVER_URL", "http://127.0.0.1:8081").rstrip("/")
-    LOCAL_LLM_URL = os.getenv("LOCAL_LLM_URL", f"{LOCAL_LLM_SERVER_URL}/completion")
-    LOCAL_LLM_MODEL = os.getenv("LOCAL_LLM_MODEL", "gemma-3-270m-it")
-    LOCAL_LLM_CLI_PATH = os.getenv("LOCAL_LLM_CLI_PATH", "/opt/bot/llama.cpp/build/bin/llama-cli")
-    LOCAL_LLM_MODEL_PATH = os.getenv("LOCAL_LLM_MODEL_PATH", "")
-    LOCAL_LLM_CONTEXT_SIZE = int(os.getenv("LOCAL_LLM_CONTEXT_SIZE", os.getenv("LOCAL_LLM_CONTEXT_TOKENS", 384)))
-    LOCAL_LLM_CONTEXT_TOKENS = LOCAL_LLM_CONTEXT_SIZE
-    LOCAL_LLM_THREADS = int(os.getenv("LOCAL_LLM_THREADS", 1))
-    LOCAL_LLM_TIMEOUT_SECONDS = int(os.getenv("LOCAL_LLM_TIMEOUT_SECONDS", 12))
-    LOCAL_LLM_MAX_TOKENS = int(os.getenv("LOCAL_LLM_MAX_TOKENS", 48))
-    LOCAL_LLM_TEMPERATURE = float(os.getenv("LOCAL_LLM_TEMPERATURE", 0.2))
-
-    # ==================================================
     # LOCAL WEB TOOLS (FREE/PUBLIC SOURCES)
     # ==================================================
     LOCAL_WEB_TOOLS_ENABLED = os.getenv("LOCAL_WEB_TOOLS_ENABLED", "true").strip().lower() == "true"
@@ -58,23 +40,18 @@ class Config:
     # ==================================================
     # NETWORK / SYSTEM
     # ==================================================
-    PC_MAC = os.getenv("PC_MAC", "")
-    FAN_GPIO_PIN = int(os.getenv("FAN_GPIO_PIN", 14))
-    FAN_TEMP_ON = float(os.getenv("FAN_TEMP_ON", 60.0))
-    FAN_TEMP_OFF = float(os.getenv("FAN_TEMP_OFF", 50.0))
+    PC_MAC = os.getenv("PC_MAC", "").strip()
+    PC_IP = os.getenv("PC_IP", "").strip()
 
     # ==================================================
-    # POCO ANDROID NODE
+    # DASHBOARD ADMIN (independente do Telegram)
     # ==================================================
-    POCO_NODE_ENABLED = os.getenv("POCO_NODE_ENABLED", "false").strip().lower() == "true"
-    POCO_NODE_ID = os.getenv("POCO_NODE_ID", "poco-x3-nfc").strip()
-    POCO_SHARED_SECRET = os.getenv("POCO_SHARED_SECRET", "")
-    POCO_SIGNATURE_MAX_AGE_SECONDS = int(os.getenv("POCO_SIGNATURE_MAX_AGE_SECONDS", 120))
-    POCO_HEARTBEAT_STALE_SECONDS = int(os.getenv("POCO_HEARTBEAT_STALE_SECONDS", 150))
-    # A bill query drives the official app end to end and can need a session
-    # recovery, so it is minutes-scale work, not a request/response round trip.
-    POCO_BILL_JOB_TIMEOUT_SECONDS = int(os.getenv("POCO_BILL_JOB_TIMEOUT_SECONDS", 240))
-    POCO_JOB_LEASE_SECONDS = int(os.getenv("POCO_JOB_LEASE_SECONDS", 60))
+    DASHBOARD_AUTH_ENABLED = os.getenv("DASHBOARD_AUTH_ENABLED", "true").strip().lower() == "true"
+    DASHBOARD_USERNAME = os.getenv("DASHBOARD_USERNAME", "marcelo").strip()
+    DASHBOARD_PASSWORD_HASH = os.getenv("DASHBOARD_PASSWORD_HASH", "").strip()
+    DASHBOARD_SESSION_SECRET = os.getenv("DASHBOARD_SESSION_SECRET", "").strip()
+    DASHBOARD_SESSION_TTL_SECONDS = int(os.getenv("DASHBOARD_SESSION_TTL_SECONDS", 28800))
+    DASHBOARD_COOKIE_SECURE = os.getenv("DASHBOARD_COOKIE_SECURE", "false").strip().lower() == "true"
 
     # ==================================================
     # CONFIG.YAML (COMPORTAMENTO)
@@ -113,9 +90,6 @@ class Config:
 
         if not Config.ALLOWED_USER_ID:
             missing.append("ALLOWED_USER_ID")
-
-        if not Config.PC_MAC:
-            missing.append("PC_MAC (necessário para Wake-on-LAN)")
 
         if missing:
             raise RuntimeError(

@@ -12,7 +12,6 @@ def test_router_question_heuristics():
 
 def test_router_command_heuristics():
     assert _is_command("status do servidor")
-    assert _is_command("reiniciar sistema")
     assert _is_command("bloquear site youtube.com")
     assert _is_command("criar lembrete")
 
@@ -67,17 +66,8 @@ async def test_router_keeps_state_changing_actions_strict():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("text", "intent"),
-    [
-        ("status do poco", "poco_status"),
-        ("tempratura do poco", "poco_status"),
-        ("internt no poco", "poco_network_check"),
-        ("conta dagua", "saneago_bills"),
-        ("conta saneag", "saneago_bills"),
-    ],
-)
-async def test_router_understands_poco_and_bill_typos(text, intent):
-    result = await route(text)
+async def test_speed_typo_never_becomes_a_state_changing_action():
+    result = await route("sped treste")
 
-    assert result["intent"] == intent
+    assert result["intent"] == "network_speed"
+    assert result["intent"] not in {"network_block_site", "network_block_device"}

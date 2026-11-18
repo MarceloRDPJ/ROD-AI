@@ -1,137 +1,60 @@
 # AGENTS.md — manual operacional para agentes
 
-## Missão do projeto
+## Missão
 
-Manter o ROD do Cerrado confiável no Raspberry Pi 3B. Ele é assistente pessoal de Marcelo pelo Telegram e guardião da rede doméstica. Priorize skills reais, respostas rápidas e verdade operacional. Não transforme o projeto em chatbot genérico.
+Manter o ROD do Cerrado confiável no Raspberry Pi 3B. Ele é assistente pessoal de Marcelo pelo Telegram e guardião da rede doméstica. Priorize skills reais, baixa latência e verdade operacional; não o transforme em chatbot genérico.
 
 ## Ambiente real
 
-- Hardware: Raspberry Pi 3B, 4 núcleos ARM, aproximadamente 1 GB RAM, sem sensores externos.
-- Storage: SSD USB; em produção `/` está em `/dev/sda1`.
-- Serviços vizinhos: AdGuard Home e CasaOS.
-- Projeto de produção: `/opt/bot/jarvis-do-cerrado`.
-- Remote: `MarceloRDPJ/MarceloRDPJ-jarvis-do-cerrado-prod`.
-- Branch de produção: `main`.
-- Compose correto: `/opt/bot/jarvis-do-cerrado/docker-compose.yml`.
-- Contêiner correto: `rod_cerrado`.
-- API/dashboard: porta local `8000`.
-- Deploy habitual: `/usr/local/bin/deploy_rod.sh`; valide seu conteúdo, pois versões antigas apontavam incorretamente para `/opt/bot/home_assistant_bot`.
+- Raspberry Pi 3B, quatro núcleos ARM e aproximadamente 1 GB de RAM.
+- `/` em SSD USB (`/dev/sda1`); cartão SD inserido, mas sem papel presumido.
+- AdGuard Home e CasaOS compartilham o host.
+- Produção em `/opt/bot/jarvis-do-cerrado`, branch `main`.
+- Remote canônico: `MarceloRDPJ/ROD-AI`.
+- Compose: `docker-compose.yml`; contêiner: `rod_cerrado`; API local: porta 8000.
+- Deploy: `/usr/local/bin/deploy_rod.sh`.
+- Não existe hardware auxiliar funcional, ventoinha controlável ou sensor externo.
 
 ## Arquitetura obrigatória
 
-O atendimento não usa LLM. Não conectar `Brain`, roteador, healthcheck ou Compose a `llama.cpp`, GGUF, OpenAI, Gemini, Groq ou outra IA sem pedido explícito do proprietário e medição no Pi real.
-
-Pipeline:
+O atendimento não usa LLM. Não conecte runtime, healthcheck ou Compose a modelos locais ou APIs generativas sem pedido explícito e medição no Pi real.
 
 1. `normalizer.py` normaliza texto.
 2. `rules.py` trata regras exatas e ações sensíveis.
-3. `intent_engine.py` usa RapidFuzz para variações seguras.
-4. `brain.py` consulta conhecimento local/fonte real ou pede esclarecimento.
+3. `intent_engine.py` usa RapidFuzz somente para variações seguras.
+4. `brain.py` consulta skill/fonte real ou pede esclarecimento.
 5. `executor.py` executa e protege efeitos colaterais.
 6. `modules/`, `services/` e `tools/` coletam dados reais.
 
-Contas Equatorial usam uma cadeia oficial: sessão web, Clara de Goiás no WhatsApp
-e cache informativo. O WhatsApp roda no Poco como aparelho adicional, sem SIM. A
-automação deve permanecer restrita ao contato oficial, somente leitura, com limite
-de reenvio e resultado financeiro aceito apenas quando valor e referência/vencimento
-forem coerentes ou quando a concessionária declarar explicitamente ausência de débito.
+## Regras de produto e segurança
 
-`llm_fallback.py` é legado fora do runtime. Não interpretar sua presença como arquitetura ativa.
+- `speed`, `sped treste`, `status`, `tempratura do pi` e menus devem responder.
+- Tolerar typos apenas em consultas sem efeito colateral.
+- Bloquear ou alterar estado exige correspondência forte e confirmação.
+- Nunca apresentar valor pronto como medição real ou anunciar hardware ausente.
+- Preserve `ALLOWED_USER_ID`; mantenha o dashboard apenas na LAN/VPN.
+- Nunca leia, imprima ou versione o `.env` real, tokens, credenciais, IDs ou banco.
+- Ações sensíveis ficam em `SENSITIVE_ACTIONS` e usam pending action/confirmação.
 
-## Regras de produto
+## Git e dados
 
-- Consultas como `speed`, `sped treste`, `status` e `tempratura do pi` devem funcionar.
-- Para consultas sem efeito colateral, tolerar erros de digitação com limite controlado.
-- Para bloquear, reiniciar, apagar ou alterar estado, exigir correspondência forte e confirmação.
-- Nunca apresentar valor pronto como se fosse medição real.
-- Resposta técnica compacta é desejável: `CPU: 12%, RAM: 43%, Temp: 48 °C.`
-- Humanizar escolha de palavras, não fatos.
-- Quando não houver skill, responder em milissegundos orientando para Pi, rede, AdGuard, agenda ou menu.
-- Contexto deve ser curto, associado ao `chat_id` e nunca conceder autorização implícita.
-- Não anunciar sensor, integração ou automação que o hardware/código não confirme.
-
-## Segurança
-
-- Nunca ler, imprimir, editar ou versionar o `.env` real sem necessidade explícita.
-- Nunca expor `TELEGRAM_TOKEN`, credenciais do AdGuard, IDs privados ou conteúdo do banco.
-- O dashboard não possui autenticação documentada; mantenha-o restrito à LAN/VPN.
-- Preserve a verificação de `ALLOWED_USER_ID`.
-- Ações sensíveis devem continuar em `SENSITIVE_ACTIONS` e passar por pending action/confirmação.
-- Não afrouxar fuzzy matching para comandos destrutivos.
-
-## Git e arquivos do usuário
-
-- O worktree pode estar sujo. Inspecione `git status --short` e diffs antes de editar.
-- `.coverage` é um arquivo rastreado que frequentemente aparece modificado por testes; não incluí-lo automaticamente.
-- `env`, `es`, `models/`, bancos, `storage/`, `test_repro.db` e `teste` podem ser dados locais/preexistentes. Não apagar, resetar ou versionar sem autorização específica.
-- Nunca usar `git reset --hard` ou checkout destrutivo para limpar o projeto.
-- Stage somente caminhos exatos pertencentes à tarefa.
-- Antes de push, confirmar branch, remote, commit e testes.
-
-## Como alterar intents
-
-- Regra exata, regex perigosa ou confirmação: `core/rules.py`.
-- Frases naturais e typos de consulta: `nlp/intent_engine.py`.
-- Normalização geral: `nlp/normalizer.py`.
-- Texto programado: `core/personality.py` ou `nlp/local_brain.py`.
-- Execução: `core/executor.py` e módulo correspondente.
-- Adicionar testes positivos, variações ortográficas e pelo menos um negativo que prove que ação perigosa não foi acionada.
+- Inspecione status e diffs antes de editar; o worktree pode estar sujo.
+- `.env`, bancos, `env`, `es`, `models/`, `storage/` e artefatos locais são dados do usuário.
+- Nunca use `git reset --hard` ou limpeza destrutiva.
+- Stage apenas caminhos da tarefa; confirme branch, remote, commit e testes antes de push.
 
 ## Testes mínimos
 
 ```bash
 export PYTHONPATH=src
 pytest --no-cov
-```
-
-Antes do deploy, simular no roteador:
-
-```text
-speed
-sped
-sped treste
-status
-status do raspi
-tempratura do pi
-menu
-menu rede
-menu agenda
-meus lembretes
-qual a velocidade da net
-batata com banana?
-bluqear sit
-```
-
-Esperado: skills corretas para consultas, esclarecimento local para assunto desconhecido e nenhuma ação de bloqueio para texto ambíguo. Validar também `docker compose config --quiet`.
-
-O CI mede cobertura global e pode ficar vermelho pelo limiar histórico mesmo quando toda a suíte funcional passa. Reportar as duas coisas separadamente; não ocultar falha.
-
-## Deploy seguro
-
-No Pi:
-
-```bash
-cd /opt/bot/jarvis-do-cerrado
-git status --short
-git fetch origin main
-git merge --ff-only origin/main
 docker compose config --quiet
-docker compose build homebot
-docker compose up -d --no-deps --remove-orphans homebot
-docker compose ps
-curl -sS --max-time 10 http://127.0.0.1:8000/api/system/health
-docker logs --tail 100 rod_cerrado
 ```
 
-Não derrubar a versão saudável antes de saber que fetch, merge, configuração e build funcionaram. Após a migração sem LLM, remover contêineres antigos somente depois do healthcheck verde. Arquivos GGUF no SSD não afetam o runtime e podem ser tratados separadamente.
+Simule: `speed`, `sped`, `sped treste`, `status`, `status do raspi`, `tempratura do pi`, `menu`, `menu rede`, `menu agenda`, `meus lembretes`, `qual a velocidade da net`, `batata com banana?` e `bluqear sit`. A última frase não pode bloquear nada.
 
-## Critério de conclusão
+O gate de cobertura é separado da suíte funcional; reporte os dois resultados sem ocultar falhas.
 
-Uma mudança só está pronta quando:
+## Conclusão
 
-- comportamento corresponde a dado real ou skill explícita;
-- testes relevantes e suíte funcional passam;
-- Compose é válido;
-- documentação acompanha a mudança;
-- nenhum segredo ou artefato local entrou no diff;
-- existe procedimento de validação e recuperação no Pi.
+Uma mudança só está pronta com comportamento baseado em dado real, testes relevantes, Compose válido, documentação atualizada, nenhum segredo no diff e procedimento de validação/recuperação no Pi.

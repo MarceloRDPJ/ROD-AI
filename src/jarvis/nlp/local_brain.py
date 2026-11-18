@@ -179,7 +179,7 @@ class LocalBrain:
             "status": "Use o comando de status para eu verificar dados reais do sistema.",
             "uptime": "Consigo consultar o uptime real pelo módulo de sistema.",
             "log de erro": "Consigo consultar eventos reais; não vou afirmar zero erro sem olhar o banco/logs.",
-            "reiniciar": "Reinicialização requer confirmação.",
+            "reiniciar": "Reinício do host não fica disponível pelo bot. Use o runbook no Pi.",
             "ajuda": "Comandos disponíveis no menu /help.",
 
             # === TECNOLOGIA (10) ===

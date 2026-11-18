@@ -38,14 +38,6 @@ class GuardianService:
 
         self.last_device_scan_time = 0
 
-        self.POCO_CHECK_INTERVAL = 60
-        self.POCO_MISSES_BEFORE_ALERT = 3
-        self.last_poco_check_time = 0
-        self.poco_state = "unknown"
-        self.poco_consecutive_misses = 0
-        self.last_poco_internet_probe_time = 0.0
-        self.last_poco_internet_probe: tuple[dict | None, str | None] = (None, None)
-
         # State: Dispositivos online no último ciclo
         self.online_macs: Optional[Set[str]] = None
 
@@ -69,9 +61,6 @@ class GuardianService:
                     await self.check_device_changes()
                     self.last_device_scan_time = now
 
-                if now - self.last_poco_check_time >= self.POCO_CHECK_INTERVAL:
-                    await self.check_poco_node()
-                    self.last_poco_check_time = now
             except Exception as e:
                 logger.error(f"Erro no loop do Guardian: {e}")
                 await asyncio.sleep(5)
@@ -90,56 +79,6 @@ class GuardianService:
                 logger.info(f"Queda de energia detectada. Mensagem na fila: {msg}")
         except Exception as e:
             logger.error(f"Erro ao verificar status de energia: {e}")
-
-    async def check_poco_node(self):
-        """Watchdog do nó Android.
-
-        Observa o heartbeat e avisa uma única vez por transição. Nunca reenvia
-        comandos nem tenta acordar o aparelho: se o Poco caiu, insistir só gasta
-        bateria e enche o Telegram.
-        """
-        from jarvis.config import Config
-
-        if not Config.POCO_NODE_ENABLED:
-            return
-        try:
-            from jarvis.api.app import get_poco_service
-
-            status = get_poco_service().status()
-        except Exception:
-            logger.debug("Watchdog do Poco não conseguiu ler o estado do nó", exc_info=True)
-            return
-
-        heartbeat = status.get("heartbeat")
-        if not heartbeat:
-            # O nó nunca se apresentou. Não há queda para relatar.
-            return
-
-        if status.get("online"):
-            if self.poco_state == "delayed":
-                logger.info("Heartbeat do Poco voltou ao intervalo normal.")
-            self.poco_state = "online"
-            self.poco_consecutive_misses = 0
-            return
-
-        # Android em repouso atrasa ScheduledExecutor mesmo com o foreground
-        # service vivo. Em produção isso aconteceu dezenas de vezes por dia e o
-        # Telegram afirmava falsamente que o aparelho estava desligado. Heartbeat
-        # atrasado agora é telemetria; uma ação ativa é que prova conectividade.
-        if self.poco_state != "delayed":
-            age = max(0, time.time() - float(heartbeat.get("received_at") or 0))
-            logger.warning("Heartbeat do Poco atrasado em %.0fs; alerta ao dono suprimido.", age)
-        self.poco_state = "delayed"
-
-    async def _active_poco_internet_probe(self):
-        now = time.time()
-        if now - self.last_poco_internet_probe_time < 300:
-            return self.last_poco_internet_probe
-        from jarvis.services.poco_jobs import run_poco_job
-
-        self.last_poco_internet_probe = await run_poco_job("network_check", 35)
-        self.last_poco_internet_probe_time = time.time()
-        return self.last_poco_internet_probe
 
     async def check_internet_status(self):
         metrics = await NetworkModule.get_ping_metrics()
@@ -163,30 +102,20 @@ class GuardianService:
                 if sent: self.pending_power_msg = None
         else:
             self.consecutive_ping_failures += 1
-            if self.consecutive_ping_failures == 1: pass
-            elif self.consecutive_ping_failures == 2:
+            if self.consecutive_ping_failures == 1:
+                return
+            if self.consecutive_ping_failures == 2:
                 if self.internet_state == "online":
-                    poco, error = await self._active_poco_internet_probe()
-                    if poco and poco.get("internet_validated"):
-                        logger.warning("Ping do Pi falhou, mas o Poco confirmou internet; alerta suprimido.")
-                        self.consecutive_ping_failures = 0
-                    elif poco is not None:
-                        sent = await self.send_message(
-                            "A internet não respondeu nem no Pi nem no Poco. Vou continuar acompanhando."
-                        )
-                        if sent:
-                            self.internet_state = "offline"
-                    else:
-                        logger.warning("Pi sem ping e Poco sem resposta ao teste ativo: %s", error)
-                        self.internet_state = "unstable"
-            elif self.consecutive_ping_failures == 3:
-                if self.internet_state != "offline":
-                    sent = await self.send_message(
-                        "O Pi continua sem acesso externo e o Poco não respondeu ao teste. "
-                        "A rede pode estar indisponível; sigo verificando."
-                    )
-                    if sent: self.internet_state = "offline"
-                    else: self.internet_state = "offline"
+                    self.internet_state = "unstable"
+                    logger.warning("Dois testes externos consecutivos falharam no Raspberry Pi.")
+                return
+            if self.internet_state != "offline":
+                sent = await self.send_message(
+                    "O Raspberry Pi continua sem acesso externo. "
+                    "A rede pode estar indisponível; sigo verificando."
+                )
+                if sent:
+                    self.internet_state = "offline"
 
     # =========================================================================
     # 🕵️‍♂️ DISPOSITIVOS (SPAM FIX)
