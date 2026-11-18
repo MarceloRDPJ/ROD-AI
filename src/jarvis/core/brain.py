@@ -14,8 +14,7 @@ logger = logging.getLogger("core.brain")
 COMMAND_INTENTS = {
     "network_scan", "network_speed", "network_status", "network_stats",
     "network_block", "network_rename", "network_block_site",
-    "system_status", "system_logs", "system_reboot", "system_restart_adguard",
-    "fan_control",
+    "system_status", "system_logs",
     "reminder_set", "reminder_list", "reminder_today", "reminder_overdue",
     "reminder_delete", "reminder_update",
     "hydration_activate", "hydration_log", "hydration_status",
@@ -41,9 +40,8 @@ class Brain:
 
     async def classify_intent(self, user_text: str) -> Optional[Dict[str, Any]]:
         """
-        Classifica se o texto é um COMANDO ou CONVERSA.
-        Usa o LLM local como cérebro para tomar a decisão.
-        Retorna None se não conseguir classificar (offline/erro).
+        Classifica se o texto é um COMANDO ou CONVERSA usando conhecimento
+        local. Retorna None quando o roteador determinístico deve continuar.
         """
         user_text = normalize_text(user_text)
 

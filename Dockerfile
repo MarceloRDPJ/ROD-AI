@@ -1,29 +1,36 @@
-FROM python:3.12-slim
+FROM python:3.12-slim AS builder
 
-# Set working directory
-WORKDIR /app
+WORKDIR /build
 
-# Install system dependencies (Scapy needs libpcap, psutil needs build-essential)
-RUN apt-get update && apt-get install -y \
-    gcc \
-    iputils-ping \
-    libpcap-dev \
-    speedtest-cli \
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends gcc libpcap-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy requirements and install
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+COPY pyproject.toml README.md LICENSE ./
+COPY src ./src
 
-# Copy source code
-COPY . .
+RUN python -m pip install --upgrade pip \
+    && python -m pip wheel --wheel-dir /wheels .
 
-# Install local package
-RUN pip install -e .
 
-# Environment variables
-ENV PYTHONUNBUFFERED=1
-ENV PYTHONPATH=/app/src
+FROM python:3.12-slim AS runtime
 
-# Run the bot
+WORKDIR /app
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends iputils-ping libpcap0.8 speedtest-cli \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /wheels /wheels
+RUN python -m pip install --no-cache-dir /wheels/*.whl \
+    && rm -rf /wheels
+
+# Mantemos o código no caminho histórico porque os volumes persistentes do Pi
+# apontam para src/jarvis/database e src/jarvis/storage.
+COPY src ./src
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONPATH=/app/src
+
 CMD ["python", "-m", "jarvis.main"]

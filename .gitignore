@@ -1,13 +1,40 @@
-__pycache__/
-*.pyc
+# Segredos e configuração local
 .env
-.DS_Store
-homebot.db
+.env.*
+!.env.example
+
+# Python, testes e builds
+__pycache__/
+*.py[cod]
 *.egg-info/
+.venv/
+.uv-cache/
 dist/
 build/
 .pytest_cache/
 .mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+
+# Dados operacionais — nunca devem entrar no Git
+*.db
+*.db-*
+*.sqlite
+*.sqlite-*
+backups/
+models/
+env
+es
+src/jarvis/storage/artifacts/
+src/jarvis/storage/poco_node.json
+
+# Ferramentas e IDEs locais
+.DS_Store
+.claude/
 .tools/
-**/.gradle/
+.opencode.json*
 local.properties
+**/.gradle/

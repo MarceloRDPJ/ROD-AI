@@ -126,42 +126,10 @@ class HybridIntentEngine:
                 "como ta o rasp", "diagnostico", "saude do sistema",
                 "healthcheck", "desempenho", "como esta o sistema", "performance"
             ],
-            "poco_status": [
-                "status do poco", "status poco", "como ta o poco", "bateria do poco",
-                "statu do poco", "temperatura do poco", "tempratura do poco"
-            ],
-            "poco_network_check": [
-                "internet pelo poco", "teste internet pelo poco", "rede do poco",
-                "testar internet no poco", "internt no poco", "conexao pelo poco"
-            ],
-            "saneago_bills": [
-                "conta de agua", "conta saneago", "fatura saneago", "consultar saneago",
-                "ver conta de agua", "conta dagua", "fatura de agua", "conta saneag"
-            ],
-            "equatorial_bills": [
-                "conta de luz", "conta de energia", "fatura equatorial", "consultar equatorial",
-                "conta equatorial", "fatura de luz", "fatura de energia", "boleto da equatorial",
-                "ver conta de luz", "conta de lus", "conta equatoral", "segunda via da luz"
-            ],
-            "fan_control": [
-                "ligar fan", "desligar fan", "status do fan", "ventoinha",
-                "ligar ventoinha", "desligar ventoinha", "controlar fan",
-                "cooler",
-                "ventilador", "controlar ventoinha", "fan speed",
-                "velocidade do fan", "status cooler"
-            ],
             "system_logs": [
                 "logs do sistema", "ver logs", "log de erro", "mostrar logs", "ultimos eventos",
                 "ultimos logs", "eventos do sistema", "registros",
                 "historico de eventos", "log de atividades"
-            ],
-            # "conta de luz" saiu daqui: é fatura, não monitoramento de consumo, e
-            # empatava com equatorial_bills mandando a consulta real para a skill errada.
-            "energy_status": [
-                "consumo de energia", "energia hoje",
-                "energia mensal", "quanto gasta energia",
-                "gasto de energia", "consumo eletrico",
-                "kwh hoje", "quanto gastei de energia"
             ],
             "greet": [
                 "oi", "ola", "bom dia", "boa tarde", "boa noite", "e ai",
@@ -381,25 +349,6 @@ def detect_intent(text: str) -> Dict:
     if intent == "reminder_set":
         return _parse_reminder(text)
 
-    if intent == "energy_status":
-        return recognized({
-            "intent": "energy_status",
-            "period": _extract_period(text.lower())
-        })
-
-    if intent in ("equatorial_bills", "saneago_bills"):
-        # O imóvel decide qual unidade será lida no cofre do Poco. Perder essa
-        # extração no caminho fuzzy fazia toda variação cair em "casa" e consultar
-        # o imóvel errado sem avisar ninguém.
-        from jarvis.core.rules import _bill_property
-
-        return recognized({
-            "intent": intent,
-            "action": "read",
-            "entity": "bill",
-            "params": {"property": _bill_property(normalized)},
-        })
-
     if intent == "network_rename":
         return _parse_rename(text)
 
@@ -444,7 +393,6 @@ def detect_intent(text: str) -> Dict:
 
     if intent == "reminder_delete":
         # Tenta extrair ID ou termo de busca
-        import re
         match = re.search(r'(\d+)', text)
         target_id = int(match.group(1)) if match else None
         return {
@@ -485,7 +433,6 @@ def _parse_rename(text: str) -> Dict:
     Ex: "mudar o nome do 192.168.1.52 para PC marcelo"
     Ex: "renomear 192.168.1.54 por celular Marcelo"
     """
-    import re
     # Extract IP
     ip_match = re.search(r'(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})', text)
     target = ip_match.group(1) if ip_match else None
@@ -521,7 +468,6 @@ def _parse_rename(text: str) -> Dict:
             "text": text
         }
     }
-
 def _parse_reminder(text: str) -> Dict:
     """
     Parser de lembrete em linguagem natural.

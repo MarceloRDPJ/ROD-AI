@@ -420,7 +420,7 @@ class NetworkModule:
             if not re.match(r'^([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})$', mac_address):
                 return {
                     "success": False,
-                    "message": f"MAC address inválido: {mac_address}"
+                    "message": "MAC do PC inválido ou não configurado"
                 }
 
             # Remove separadores para formato aceito pela lib
@@ -429,18 +429,18 @@ class NetworkModule:
             # Envia pacote mágico (broadcast)
             await asyncio.to_thread(send_magic_packet, mac_clean)
 
-            logger.info(f"✅ Pacote WOL enviado para {mac_address}")
+            logger.info("Pacote WOL enviado para o PC configurado")
 
             return {
                 "success": True,
-                "message": f"Pacote mágico enviado para {mac_address}"
+                "message": "Pacote mágico enviado para o PC configurado"
             }
 
-        except Exception as e:
-            logger.error(f"❌ Erro ao enviar Wake-on-LAN: {e}")
+        except Exception:
+            logger.exception("Erro ao enviar Wake-on-LAN")
             return {
                 "success": False,
-                "message": f"Erro: {str(e)}"
+                "message": "Falha ao enviar o pacote Wake-on-LAN"
             }
 
     @staticmethod
@@ -485,7 +485,7 @@ class NetworkModule:
 
         res = await NetworkModule.wake_on_lan(Config.PC_MAC)
         if res["success"]:
-            return f"⚡ Wake-on-LAN enviado para `{Config.PC_MAC}`."
+            return "⚡ Wake-on-LAN enviado para o PC configurado."
         return f"❌ {res['message']}"
 
     # ==================================================

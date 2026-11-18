@@ -1,33 +1,44 @@
-name: Tests
+name: Quality
 
 on:
   push:
-    branches: [ main, develop ]
+    branches: [main]
   pull_request:
-    branches: [ main ]
+    branches: [main]
+
+permissions:
+  contents: read
 
 jobs:
   test:
     runs-on: ubuntu-latest
-
     steps:
-    - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
-    - name: Set up Python
-      uses: actions/setup-python@v4
-      with:
-        python-version: '3.10'
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
 
-    - name: Install dependencies
-      run: |
-        pip install -r requirements.txt
-        pip install pytest pytest-asyncio pytest-cov pytest-mock
+      - name: Install project and test tools
+        run: python -m pip install --upgrade pip && python -m pip install -e ".[test]"
 
-    - name: Run tests
-      run: |
-        pytest --cov=src/jarvis --cov-report=xml
+      - name: Check syntax and undefined names
+        run: ruff check --select E9,F63,F7,F82 src tests
 
-    - name: Upload coverage
-      uses: codecov/codecov-action@v3
-      with:
-        file: ./coverage.xml
+      - name: Run functional suite
+        run: pytest --no-cov
+
+      - name: Validate Compose
+        run: docker compose config --quiet
+
+      - name: Run coverage gate
+        run: pytest
+
+      - name: Upload coverage
+        if: always()
+        uses: codecov/codecov-action@v5
+        with:
+          files: ./coverage.xml
+          fail_ci_if_error: false

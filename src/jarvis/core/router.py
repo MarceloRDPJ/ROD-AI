@@ -30,7 +30,7 @@ TYPO_TOLERANT_INTENTS = {
     "network_scan", "reminder_list", "reminder_today", "reminder_overdue",
     "hydration_status", "hydration_analytics", "help", "command_list",
     "menu_rede", "menu_agenda", "menu_automacoes", "menu_sistema",
-    "daily_report", "energy_status",
+    "daily_report",
 }
 
 
@@ -59,7 +59,7 @@ _QUESTION_WORDS = {
 
 # Palavras que indicam comando de sistema
 _COMMAND_WORDS = {
-    "status", "ligar", "desligar", "reiniciar", "ajuda", "help",
+    "status", "ligar", "desligar", "ajuda", "help",
     "lembrete", "lembrar", "bloquear", "desbloquear",
     "ativar", "desativar", "pausar", "retomar", "cancelar",
     "confirmar", "listar", "criar", "editar", "mudar", "alterar",
