@@ -137,6 +137,9 @@ def apply_rules(text: str, structured_entities: Optional[Dict] = None) -> Option
     if "menu_agenda" in t or "menu agenda" in t or "menu lembrete" in t or "menu tarefas" in t:
         return {"intent": "menu_agenda", "action": "show", "entity": "reminder", "confidence": 1.0}
 
+    if "menu_agua" in t or "menu agua" in t or "menu hidratacao" in t or "menu de agua" in t:
+        return {"intent": "menu_agua", "action": "show", "entity": "hydration", "confidence": 1.0}
+
     if "menu_automacoes" in t or "menu automacoes" in t or "menu automações" in t or "ver automacoes" in t:
         return {"intent": "menu_automacoes", "action": "show", "entity": "automation", "confidence": 1.0}
 

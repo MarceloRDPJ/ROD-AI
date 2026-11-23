@@ -56,6 +56,19 @@ def sanitize_inline_value(value) -> str:
     return re.sub(_MARKDOWN_ENTITY_CHARS, "", str(value))
 
 
+# O codigo foi escrito com `**negrito**`, sintaxe do Markdown moderno. O modo
+# legado do Telegram usa um asterisco so, entao `**` renderiza errado. A
+# conversao acontece aqui, no unico ponto por onde todo texto passa: fazer
+# isso arquivo a arquivo esbarraria em `**kwargs` do proprio Python.
+_DOUBLE_BOLD = re.compile(r"(?<!\*)\*\*(?!\*)(.+?)(?<!\*)\*\*(?!\*)", re.DOTALL)
+_SINGLE_BOLD = r"*\1*"
+
+
+def normalize_markup(text: str) -> str:
+    """Converte `**negrito**` para o `*negrito*` que o Telegram legado entende."""
+    return _DOUBLE_BOLD.sub(_SINGLE_BOLD, str(text or ""))
+
+
 def _is_parse_error(error) -> bool:
     """O Telegram recusou a marcacao, e nao a mensagem."""
     text = str(error).lower()
@@ -77,7 +90,7 @@ async def _dispatch(send, text, reply_markup, parse_mode):
         except TelegramError as retry_error:
             logger.error(f"Falha ao enviar mensagem Telegram após retry: {retry_error}")
 
-    for index, chunk in enumerate(message_chunks(text)):
+    for index, chunk in enumerate(message_chunks(normalize_markup(text) if parse_mode else text)):
         kwargs = {"reply_markup": reply_markup if index == 0 else None}
         if parse_mode:
             kwargs["parse_mode"] = parse_mode
@@ -133,6 +146,9 @@ async def safe_edit_text(edit, text, reply_markup=_UNSET, parse_mode=_UNSET) -> 
     """
     if parse_mode is _UNSET:
         parse_mode = DEFAULT_PARSE_MODE
+
+    if parse_mode:
+        text = normalize_markup(text)
 
     kwargs = {"text": text}
     if reply_markup is not _UNSET:

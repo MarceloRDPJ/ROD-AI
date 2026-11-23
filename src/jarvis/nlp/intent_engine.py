@@ -251,6 +251,8 @@ class HybridIntentEngine:
             "menu_agenda": ["menu agenda", "comandos lembretes", "ajuda lembretes", "menu_agenda",
                             "ajuda de agenda", "agenda ajuda", "comandos da agenda",
                             "funcoes de agenda", "opcoes de agenda"],
+            "menu_agua": ["menu agua", "menu_agua", "menu hidratacao", "comandos hidratacao",
+                          "ajuda hidratacao", "opcoes de agua", "funcoes de hidratacao"],
             "menu_automacoes": ["menu automacoes", "menu_automacoes",
                                 "ajuda automacoes", "comandos automacoes", "automacoes ajuda",
                                 "funcoes automacao", "opcoes automacao"],
