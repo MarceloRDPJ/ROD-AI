@@ -115,6 +115,7 @@ async def test_power_gap_is_queued_until_connectivity_returns(monkeypatch):
     await guardian.check_power_status()
 
     assert "12 minutos" in guardian.pending_power_msg
+    assert "energia caiu" not in guardian.pending_power_msg
 
 
 @pytest.mark.parametrize(

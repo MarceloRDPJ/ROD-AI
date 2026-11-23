@@ -92,13 +92,15 @@ class GuardianService:
             logger.error(f"Erro ao verificar status de energia: {e}")
 
     async def _explain_downtime(self, gap_minutes: float) -> Optional[str]:
-        """Só chama de queda de energia o que o uptime do Pi comprova.
+        """Relata a interrupção pelo que o uptime do host comprova, e só isso.
 
-        Um intervalo sem snapshot também aparece quando apenas o serviço
-        reinicia — deploy, atualização ou crash do contêiner. Nesses casos o Pi
-        nunca desligou, e anunciar queda de energia é afirmar uma causa sem
-        evidência. A distinção é verificável: numa queda real o host reinicia,
-        então o uptime dele não pode ser maior que o intervalo observado.
+        Um intervalo sem snapshot aparece tanto quando o Pi reinicia quanto
+        quando apenas o serviço reinicia — deploy, atualização ou crash do
+        contêiner. O uptime separa os dois casos: se o host ficou ligado o
+        tempo todo, ele não pode ter reiniciado.
+
+        O que o uptime não diz é *por que* o host reiniciou. Por isso nenhuma
+        causa é nomeada: o ROD informa a ausência e o reinício observados.
         """
         try:
             raw = await SystemModule.get_raw_status()
@@ -124,9 +126,15 @@ class GuardianService:
                 "Já voltei."
             )
 
-        if gap_minutes >= 10:
-            return f"Ei, a energia caiu e ficou fora por uns {int(gap_minutes)} minutos. Já conferi os serviços e tá tudo ok."
-        return "Parece que a energia caiu por um tempo. Agora voltou e tô subindo tudo de novo."
+        # O host reiniciou, e só isso é fato. Queda de energia, trava do sistema
+        # e reset do watchdog de hardware produzem exatamente o mesmo reinício,
+        # e o Pi não expõe sinal confiável para separá-los: o driver BCM2835
+        # devolve bootstatus 0 em qualquer caso. Nomear a causa seria chute.
+        return (
+            f"Fiquei fora do ar por uns {int(gap_minutes)} minutos e o Pi reiniciou. "
+            "Não sei dizer o porquê: queda de energia, trava do sistema ou reset "
+            "automático dão o mesmo resultado. Já conferi os serviços e tá tudo de pé."
+        )
 
     async def check_internet_status(self):
         metrics = await NetworkModule.get_ping_metrics()
