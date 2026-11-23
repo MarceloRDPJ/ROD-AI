@@ -73,3 +73,12 @@ Relatórios e automações por horário disparam uma única vez por período, de
 Todo horário agendado é lido em `Config.TIMEZONE`, nunca na hora local do processo. Não por falta de fuso no contêiner: a imagem `python:3.12-slim` já traz `tzdata`, e o `TZ` do Compose resolve corretamente — verificado no Pi, onde `date` dentro do contêiner responde `-03`. O `tzdata` consta do `Dockerfile` apenas para declarar a dependência em vez de herdá-la da imagem base.
 
 A razão de ler sempre `Config.TIMEZONE` é outra: data e hora **ingênuas** atravessam camadas com significados diferentes. O scheduler trata um `target_date` sem fuso como UTC, enquanto quem o gravava usava a hora local do processo. Com o fuso resolvendo em `-03`, um lembrete criado pelo fallback de `flows` disparava três horas adiantado. Gravar sempre com fuso explícito elimina a ambiguidade na origem.
+
+## Formatação das mensagens
+
+As mensagens do ROD são escritas com marcação Markdown — `comando` em monoespaçado, *destaque* em negrito. Nenhum chamador passava `parse_mode`, então o Telegram mostrava crase e asterisco como texto literal em toda a ajuda, nos menus e nos alertas do guardião. O padrão agora vive nos remetentes seguros (`safe_reply_text`, `safe_send_message`) e nas edições de menu, e quem precisa de texto cru passa `parse_mode=None` explicitamente.
+
+Duas proteções acompanham essa escolha:
+
+- Erro de parse reenvia o mesmo conteúdo sem marcação. Perder o negrito é preferível a perder a mensagem. A limpeza remove apenas o que o Markdown legado interpreta (`` ` ``, `*`, `_`, `[`, `]`); antes ela também removia ponto e hífen, destruindo IP, data e horário justamente na mensagem de recuperação.
+- Nome, hostname e fabricante são anunciados pelo próprio aparelho da rede. O Markdown legado do Telegram não aceita escape, então esses valores passam por `sanitize_inline_value` antes de entrar na mensagem — num nome DNS ou fabricante esses caracteres não carregam informação.

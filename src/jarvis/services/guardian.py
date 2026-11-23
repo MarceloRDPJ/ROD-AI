@@ -10,6 +10,7 @@ from jarvis.modules.system import SystemModule
 from jarvis.database.persistence import Persistence
 from jarvis.services.automation_helpers import build_unknown_device_markup
 from jarvis.services.device_intelligence import DeviceIntelligence
+from jarvis.core.telegram_safe import safe_send_message
 
 logger = logging.getLogger("services.guardian")
 
@@ -267,12 +268,13 @@ class GuardianService:
         pass
 
     async def send_message(self, text: str, reply_markup=None) -> bool:
+        # safe_send_message renderiza a marcacao e, se o Telegram recusar o
+        # parse, reenvia sem ela. Antes o guardiao chamava bot.send_message
+        # direto e sem parse_mode, entao crase e asterisco apareciam na tela.
         try:
-            await self.app.bot.send_message(
-                chat_id=self.chat_id,
-                text=text,
-                reply_markup=reply_markup,
+            return await safe_send_message(
+                self.app.bot, self.chat_id, text, reply_markup=reply_markup
             )
-            return True
         except Exception:
+            logger.exception("Falha ao enviar mensagem do guardiao")
             return False

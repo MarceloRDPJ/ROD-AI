@@ -42,7 +42,7 @@ async def test_help_command_preserves_inline_keyboard():
 
     await main.help_command(update, context)
 
-    update.message.reply_text.assert_awaited_once_with("ajuda", reply_markup=markup)
+    update.message.reply_text.assert_awaited_once_with("ajuda", reply_markup=markup, parse_mode="Markdown")
 
 
 @pytest.mark.asyncio
@@ -60,7 +60,7 @@ async def test_message_handler_routes_and_replies(monkeypatch):
     await main.handle_message(update, context)
 
     context.bot.send_chat_action.assert_awaited_once_with(123, "typing")
-    update.message.reply_text.assert_awaited_once_with("resposta real", reply_markup=None)
+    update.message.reply_text.assert_awaited_once_with("resposta real", reply_markup=None, parse_mode="Markdown")
 
 
 @pytest.mark.asyncio
@@ -87,7 +87,7 @@ async def test_message_handler_preserves_structured_response(monkeypatch):
 
     await main.handle_message(update, context)
 
-    update.message.reply_text.assert_awaited_once_with("menu estruturado", reply_markup=markup)
+    update.message.reply_text.assert_awaited_once_with("menu estruturado", reply_markup=markup, parse_mode="Markdown")
 
 
 @pytest.mark.asyncio
@@ -121,7 +121,7 @@ async def test_callback_menu_edits_same_message(monkeypatch):
     await main.handle_callback(update, context)
 
     query.answer.assert_awaited_once()
-    query.edit_message_text.assert_awaited_once_with(text="rede", reply_markup=markup)
+    query.edit_message_text.assert_awaited_once_with(text="rede", reply_markup=markup, parse_mode="Markdown")
 
 
 @pytest.mark.asyncio
@@ -142,7 +142,7 @@ async def test_callback_falls_back_to_new_message_when_edit_fails(monkeypatch):
 
     await main.handle_callback(update, context)
 
-    query.message.reply_text.assert_awaited_once_with("rede atualizada", reply_markup=None)
+    query.message.reply_text.assert_awaited_once_with("rede atualizada", reply_markup=None, parse_mode="Markdown")
 
 
 @pytest.mark.asyncio

@@ -145,3 +145,31 @@ async def test_private_mac_identity_skips_vendor_lookup(monkeypatch):
 
 def test_dossier_date_keeps_unexpected_legacy_value_visible():
     assert DeviceIntelligence._date("data-legada") == "data-legada"
+
+
+@pytest.mark.asyncio
+async def test_guardian_sends_with_markup_rendered():
+    """O guardiao enviava sem parse_mode, entao crase e asterisco apareciam na tela."""
+    app = AsyncMock()
+    guardian = GuardianService(app, 123)
+
+    sent = await guardian.send_message("IP `192.168.1.9` do *vizinho*")
+
+    assert sent is True
+    kwargs = app.bot.send_message.await_args.kwargs
+    assert kwargs["parse_mode"] == "Markdown"
+    assert kwargs["text"] == "IP `192.168.1.9` do *vizinho*"
+
+
+@pytest.mark.asyncio
+async def test_guardian_falls_back_to_plain_text_when_parse_fails():
+    app = AsyncMock()
+    app.bot.send_message.side_effect = [Exception("Can't parse entities"), None]
+    guardian = GuardianService(app, 123)
+
+    sent = await guardian.send_message("IP `192.168.1.9` quebrado *")
+
+    assert sent is True
+    retry = app.bot.send_message.await_args.kwargs
+    assert "parse_mode" not in retry
+    assert "192.168.1.9" in retry["text"]
