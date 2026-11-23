@@ -6,6 +6,7 @@ from telegram.error import BadRequest, TelegramError
 
 from jarvis import main
 from jarvis.config import Config
+from jarvis.core import telegram_safe
 
 
 def _update(user_id=123, chat_id=123, text="menu"):
@@ -184,7 +185,7 @@ async def test_safe_reply_swallows_telegram_delivery_error():
 
 
 def test_long_messages_are_split_without_losing_content():
-    chunks = main._message_chunks("a" * 25, limit=10)
+    chunks = telegram_safe.message_chunks("a" * 25, limit=10)
 
     assert "".join(chunks) == "a" * 25
     assert all(len(chunk) <= 10 for chunk in chunks)

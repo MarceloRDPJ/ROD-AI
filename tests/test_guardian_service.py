@@ -5,6 +5,7 @@ import pytest
 from jarvis.core.context_reader import ContextReader
 from jarvis.database.persistence import Persistence
 from jarvis.modules.network import NetworkModule
+from jarvis.modules.system import SystemModule
 from jarvis.services.device_intelligence import DeviceIntelligence
 from jarvis.services.guardian import GuardianService
 
@@ -103,6 +104,11 @@ async def test_power_gap_is_queued_until_connectivity_returns(monkeypatch):
         ContextReader,
         "detect_gap",
         lambda max_gap_minutes: {"status": "ok", "exceeded": True, "gap_minutes": 12},
+    )
+    # Uptime do host menor que o intervalo: o Pi reiniciou de fato, então a
+    # queda de energia é uma causa comprovada e não uma suposição.
+    monkeypatch.setattr(
+        SystemModule, "get_raw_status", AsyncMock(return_value={"uptime_seconds": 90})
     )
     guardian = GuardianService(AsyncMock(), 123)
 

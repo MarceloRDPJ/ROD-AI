@@ -1,9 +1,10 @@
 import logging
 import asyncio
-from datetime import datetime, time
-from typing import Dict, Any, List, Callable
-from jarvis.database.persistence import Persistence
+from datetime import datetime
+from typing import Dict, Any, List
+from jarvis.config import Config
 from jarvis.core.events import Event
+from jarvis.core.utils import schedule_is_due
 
 logger = logging.getLogger("services.automations")
 
@@ -13,10 +14,16 @@ class AutomationEngine:
     Sistema de regras If-This-Then-That (IFTTT).
     """
 
+    # Tolerância para o laço de 60s derivar alguns segundos sem perder o
+    # disparo. Maior que isso é horário vencido e não deve ser reenviado
+    # atrasado depois de um restart.
+    CATCHUP_WINDOW_MINUTES = 5
+
     def __init__(self, application):
         self.app = application
         self.rules = self._load_rules()
         self.running = False
+        self._last_fired_day: Dict[str, str] = {}
 
     def _load_rules(self) -> List[Dict[str, Any]]:
         """
@@ -115,22 +122,44 @@ class AutomationEngine:
         while self.running:
             try:
                 await self._check_time_triggers()
-                await asyncio.sleep(60)  # Verifica a cada minuto
             except Exception:
                 logger.exception("Erro no loop de automações")
+            # O sleep fica fora do try: dentro dele, uma falha persistente
+            # reentrava no laço sem pausa e consumia a CPU do Pi.
+            await asyncio.sleep(60)  # Verifica a cada minuto
 
     async def _check_time_triggers(self):
         """Verifica automações baseadas em horário"""
-        now = datetime.now()
-        current_time = now.strftime("%H:%M")
+        now = datetime.now(Config.TZ)
 
         for rule in self.rules:
             if not rule["enabled"]:
                 continue
 
-            trigger = rule["trigger"]
-            if trigger["type"] == "time" and trigger["time"] == current_time:
+            if rule["trigger"]["type"] != "time":
+                continue
+
+            if self._time_trigger_is_due(rule, now):
+                self._last_fired_day[rule["id"]] = now.strftime("%Y-%m-%d")
                 await self._execute_action(rule["action"], None)
+
+    def _time_trigger_is_due(self, rule: Dict[str, Any], now: datetime) -> bool:
+        """Dispara uma única vez por dia, assim que o horário é alcançado."""
+        raw_time = rule["trigger"].get("time")
+        try:
+            hour, minute = (int(part) for part in str(raw_time).split(":"))
+        except (ValueError, TypeError):
+            logger.warning("Regra %s tem horário inválido: %r", rule.get("id"), raw_time)
+            return False
+
+        return schedule_is_due(
+            now,
+            hour,
+            minute,
+            period_key=now.strftime("%Y-%m-%d"),
+            last_fired=self._last_fired_day.get(rule["id"]),
+            window_minutes=self.CATCHUP_WINDOW_MINUTES,
+        )
 
     async def on_event(self, event: Event):
         """

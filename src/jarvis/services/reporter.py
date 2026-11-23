@@ -5,10 +5,17 @@ from jarvis.database.persistence import Persistence
 from jarvis.config import Config
 from jarvis.modules.system import SystemModule
 from jarvis.modules.network import NetworkModule
+from jarvis.core.utils import schedule_is_due
 
 logger = logging.getLogger("services.reporter")
 
 class ReporterService:
+    DAILY_HOUR = 7
+    DAILY_MINUTE = 0
+    WEEKLY_WEEKDAY = 0  # segunda-feira
+    WEEKLY_HOUR = 7
+    WEEKLY_MINUTE = 5
+
     def __init__(self, application):
         self.app = application
         self.running = False
@@ -32,15 +39,29 @@ class ReporterService:
     async def _check_schedule(self, now: datetime):
         today_str = now.strftime("%Y-%m-%d")
 
-        if now.hour == 7 and now.minute == 0 and self._last_report_date != today_str:
+        if schedule_is_due(
+            now,
+            self.DAILY_HOUR,
+            self.DAILY_MINUTE,
+            period_key=today_str,
+            last_fired=self._last_report_date,
+        ):
             self._last_report_date = today_str
             await self._send_daily_report()
 
-        if now.weekday() == 0 and now.hour == 7 and now.minute == 5:
-            week_str = now.strftime("%Y-W%V")
-            if self._last_week_report != week_str:
-                self._last_week_report = week_str
-                await self._send_weekly_report()
+        if now.weekday() != self.WEEKLY_WEEKDAY:
+            return
+
+        week_str = now.strftime("%Y-W%V")
+        if schedule_is_due(
+            now,
+            self.WEEKLY_HOUR,
+            self.WEEKLY_MINUTE,
+            period_key=week_str,
+            last_fired=self._last_week_report,
+        ):
+            self._last_week_report = week_str
+            await self._send_weekly_report()
 
     async def _send_daily_report(self):
         report = await self._build_daily_report()

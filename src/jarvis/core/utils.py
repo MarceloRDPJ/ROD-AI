@@ -2,7 +2,8 @@ import asyncio
 import logging
 import random
 from functools import wraps
-from datetime import datetime
+from datetime import datetime, timedelta
+from typing import Optional
 from jarvis.config import Config
 
 logger = logging.getLogger(__name__)
@@ -59,3 +60,32 @@ def is_quiet_hours(now_local: datetime, quiet_hours: dict) -> bool:
     except Exception as e:
         logger.error(f"Erro ao verificar quiet_hours: {e}")
         return False
+
+
+# Laços de serviço acordam a cada 60s e derivam alguns segundos a cada volta.
+# Comparar o minuto por igualdade perdia o disparo quando a volta caía fora do
+# minuto exato, e disparava duas vezes quando duas voltas caíam dentro dele.
+DEFAULT_SCHEDULE_WINDOW_MINUTES = 5
+
+
+def schedule_is_due(
+    now: datetime,
+    hour: int,
+    minute: int,
+    *,
+    period_key: str,
+    last_fired: Optional[str],
+    window_minutes: int = DEFAULT_SCHEDULE_WINDOW_MINUTES,
+) -> bool:
+    """Diz se um horário agendado vence agora, uma única vez por período.
+
+    Vence quando o horário já chegou, ainda está dentro da janela de tolerância
+    e `period_key` ainda não disparou. A janela evita que um horário vencido há
+    horas seja reenviado atrasado depois de um restart.
+    """
+    scheduled = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+    if now < scheduled:
+        return False
+    if now - scheduled > timedelta(minutes=window_minutes):
+        return False
+    return last_fired != period_key

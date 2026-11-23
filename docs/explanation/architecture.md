@@ -57,3 +57,17 @@ Alertas proativos também seguem esse contrato. Um novo MAC observado na rede ge
 - Hostname e nome anunciado podem sugerir `iPhone` ou um eletrodoméstico, mas o nome cadastrado pelo usuário é a única vinculação de dono tratada como confirmada.
 - O AdGuard informa consultas DNS, bloqueios e domínios. Isso é atividade observável, não consumo de banda em bytes.
 - Como o Pi não é o roteador ou ponto de acesso, ele não conhece cômodo, ponto de acesso associado, RSSI nem tráfego total do cliente. Esses dados exigiriam telemetria compatível do roteador/AP ou transformar o Pi em gateway, o que não faz parte da arquitetura atual.
+
+## Interrupções e horários agendados
+
+O ROD não afirma a causa de uma interrupção sem evidência. Um intervalo sem snapshot indica apenas que ele ficou sem coletar dados, e isso acontece tanto numa queda de energia quanto num deploy, atualização ou crash do contêiner.
+
+A distinção é verificável pelo uptime do host: numa queda real o Raspberry Pi reinicia, então seu uptime não pode ser maior que o intervalo observado. Com base nisso:
+
+- Host reiniciado durante o intervalo: o ROD relata queda de energia.
+- Host ligado o tempo todo: foi o serviço que reiniciou. Interrupções curtas ficam só no log; acima de 15 minutos ele avisa, deixando explícito que não houve queda de energia.
+- Uptime indisponível: nenhuma causa é atribuída e nada é enviado.
+
+Relatórios e automações por horário disparam uma única vez por período, dentro de uma janela de tolerância de cinco minutos. Os laços de serviço acordam a cada 60 segundos e derivam alguns segundos a cada volta; comparar o minuto por igualdade exata perdia o disparo quando a volta caía fora do minuto, e repetia quando duas voltas caíam dentro dele. A mesma janela impede que um horário vencido há horas seja reenviado atrasado depois de um restart.
+
+Todo horário agendado é lido em `Config.TIMEZONE`, nunca na hora local do processo. A imagem instala `tzdata` para que o `TZ` do Compose também valha para logs e para qualquer leitura de hora local remanescente.
