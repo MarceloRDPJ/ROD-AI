@@ -12,7 +12,7 @@ logger = logging.getLogger("core.brain")
 
 # Intenções de comando que o Brain reconhece
 COMMAND_INTENTS = {
-    "network_scan", "network_speed", "network_status", "network_stats",
+    "network_scan", "network_speed", "network_status", "network_stats", "network_device_details",
     "network_block", "network_rename", "network_block_site",
     "system_status", "system_logs",
     "reminder_set", "reminder_list", "reminder_today", "reminder_overdue",

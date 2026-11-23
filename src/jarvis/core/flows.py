@@ -226,10 +226,7 @@ class RemindersFlow:
         if step == "confirmation":
             if text.lower() in ["sim", "s", "ok", "pode", "confirmo", "beleza", "bora", "pode ser", "isso", "vambora"]:
                 return RemindersFlow.finalize_creation(chat_id, data)
-            else:
-                # Cancelar (Se falou qualquer outra coisa que não seja sim)
-                ContextEngine.save_context(chat_id, {"flow": None})
-                return "Beleza, cancelei. Se mudar de ideia é só chamar."
+            return "Ainda estou esperando sua decisão. Confirme para salvar ou cancele para descartar."
 
         return "Uai, me perdi aqui. Vamos começar de novo?"
 

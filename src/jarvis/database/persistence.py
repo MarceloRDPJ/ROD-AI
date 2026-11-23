@@ -117,7 +117,34 @@ class Persistence:
             CREATE TABLE IF NOT EXISTS devices (
                 mac TEXT PRIMARY KEY,
                 name TEXT,
-                updated_at TEXT
+                updated_at TEXT,
+                first_seen TEXT,
+                last_seen TEXT,
+                seen_count INTEGER DEFAULT 0,
+                last_ip TEXT,
+                hostname TEXT,
+                vendor TEXT,
+                device_type TEXT,
+                mac_is_private INTEGER DEFAULT 0
+            )
+            """)
+
+            for column in (
+                "first_seen TEXT", "last_seen TEXT", "seen_count INTEGER DEFAULT 0",
+                "last_ip TEXT", "hostname TEXT", "vendor TEXT", "device_type TEXT",
+                "mac_is_private INTEGER DEFAULT 0",
+            ):
+                Persistence._add_column_if_missing(c, "devices", column)
+
+            c.execute("""
+            CREATE TABLE IF NOT EXISTS device_ips (
+                mac TEXT NOT NULL,
+                ip TEXT NOT NULL,
+                first_seen TEXT NOT NULL,
+                last_seen TEXT NOT NULL,
+                seen_count INTEGER NOT NULL DEFAULT 1,
+                PRIMARY KEY (mac, ip),
+                FOREIGN KEY(mac) REFERENCES devices(mac)
             )
             """)
 
@@ -186,6 +213,14 @@ class Persistence:
             c.execute("CREATE INDEX IF NOT EXISTS idx_events_timestamp ON events(timestamp)")
             c.execute("CREATE INDEX IF NOT EXISTS idx_token_log_timestamp ON token_log(timestamp)")
             c.execute("CREATE INDEX IF NOT EXISTS idx_api_errors_source ON api_errors(source, id)")
+            c.execute("CREATE INDEX IF NOT EXISTS idx_device_ips_last_seen ON device_ips(last_seen)")
+            c.execute("""
+                UPDATE devices
+                SET first_seen = COALESCE(first_seen, updated_at),
+                    last_seen = COALESCE(last_seen, updated_at),
+                    seen_count = CASE WHEN COALESCE(seen_count, 0) < 1 THEN 1 ELSE seen_count END
+                WHERE updated_at IS NOT NULL
+            """)
 
             conn.commit()
 
@@ -194,35 +229,91 @@ class Persistence:
     # ==================================================
     @staticmethod
     def set_device_name(mac: str, name: str):
+        mac = mac.lower()
+        now = datetime.now(timezone.utc).isoformat()
         with closing(sqlite3.connect(_get_db_path())) as conn:
             c = conn.cursor()
             c.execute(
-                "INSERT OR REPLACE INTO devices (mac, name, updated_at) VALUES (?, ?, ?)",
-                (mac, name, datetime.now(timezone.utc).isoformat()),
+                """
+                INSERT INTO devices (mac, name, updated_at, first_seen, last_seen, seen_count)
+                VALUES (?, ?, ?, ?, ?, 1)
+                ON CONFLICT(mac) DO UPDATE SET name=excluded.name, updated_at=excluded.updated_at
+                """,
+                (mac, name, now, now, now),
             )
             conn.commit()
 
     @staticmethod
-    def register_device_seen(mac: str):
+    def register_device_seen(
+        mac: str,
+        ip: str | None = None,
+        hostname: str | None = None,
+        vendor: str | None = None,
+        device_type: str | None = None,
+        mac_is_private: bool = False,
+    ):
         """
         Registra que um dispositivo foi visto, mesmo sem nome.
         Garante que ele exista na tabela 'devices'.
         """
+        mac = mac.lower()
+        now = datetime.now(timezone.utc).isoformat()
         with closing(sqlite3.connect(_get_db_path())) as conn:
             c = conn.cursor()
-            # Se já existe, não faz nada (preserva o nome se tiver).
-            # Se não existe, insere com nome NULL (ou string vazia).
+            # Upsert preserva o nome escolhido pelo usuario e atualiza a observacao.
             c.execute(
-                "INSERT OR IGNORE INTO devices (mac, name, updated_at) VALUES (?, ?, ?)",
-                (mac, "", datetime.now(timezone.utc).isoformat()),
+                """
+                INSERT INTO devices (
+                    mac, name, updated_at, first_seen, last_seen, seen_count,
+                    last_ip, hostname, vendor, device_type, mac_is_private
+                ) VALUES (?, '', ?, ?, ?, 1, ?, ?, ?, ?, ?)
+                ON CONFLICT(mac) DO UPDATE SET
+                    updated_at=excluded.updated_at,
+                    last_seen=excluded.last_seen,
+                    seen_count=COALESCE(devices.seen_count, 0) + 1,
+                    last_ip=COALESCE(excluded.last_ip, devices.last_ip),
+                    hostname=COALESCE(excluded.hostname, devices.hostname),
+                    vendor=COALESCE(excluded.vendor, devices.vendor),
+                    device_type=COALESCE(excluded.device_type, devices.device_type),
+                    mac_is_private=excluded.mac_is_private
+                """,
+                (mac, now, now, now, ip, hostname, vendor, device_type, int(mac_is_private)),
             )
-            # Se quisermos atualizar o 'updated_at' sempre:
-            if c.rowcount == 0:
-                 c.execute(
-                    "UPDATE devices SET updated_at = ? WHERE mac = ?",
-                    (datetime.now(timezone.utc).isoformat(), mac)
-                 )
+            if ip:
+                c.execute(
+                    """
+                    INSERT INTO device_ips (mac, ip, first_seen, last_seen, seen_count)
+                    VALUES (?, ?, ?, ?, 1)
+                    ON CONFLICT(mac, ip) DO UPDATE SET
+                        last_seen=excluded.last_seen,
+                        seen_count=device_ips.seen_count + 1
+                    """,
+                    (mac, ip, now, now),
+                )
             conn.commit()
+
+    @staticmethod
+    def get_device_profile(mac: str) -> Optional[Dict[str, Any]]:
+        """Retorna observacoes locais, sem classificar o dispositivo como invasor."""
+        mac = mac.lower()
+        with closing(sqlite3.connect(_get_db_path())) as conn:
+            conn.row_factory = sqlite3.Row
+            c = conn.cursor()
+            c.execute("SELECT * FROM devices WHERE mac=?", (mac,))
+            row = c.fetchone()
+            if not row:
+                return None
+            profile = dict(row)
+            profile["mac_is_private"] = bool(profile.get("mac_is_private"))
+            c.execute(
+                """
+                SELECT ip, first_seen, last_seen, seen_count
+                FROM device_ips WHERE mac=? ORDER BY last_seen DESC LIMIT 10
+                """,
+                (mac,),
+            )
+            profile["ips"] = [dict(ip_row) for ip_row in c.fetchall()]
+            return profile
 
     @staticmethod
     def device_exists(mac: str) -> bool:

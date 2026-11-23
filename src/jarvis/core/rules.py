@@ -16,7 +16,7 @@ from typing import Dict, Optional
 import re
 
 
-def apply_rules(text: str) -> Optional[Dict]:
+def apply_rules(text: str, structured_entities: Optional[Dict] = None) -> Optional[Dict]:
     """
     Analisa texto normalizado e retorna um intent estruturado
     ou None se nenhuma regra casar.
@@ -26,6 +26,7 @@ def apply_rules(text: str) -> Optional[Dict]:
         return None
 
     t = text.lower().strip()
+    structured_entities = structured_entities or {}
 
     # =====================================================
     # CONFIRMAÇÃO / CANCELAMENTO DE AÇÃO (PASSO 10)
@@ -175,6 +176,18 @@ def apply_rules(text: str) -> Optional[Dict]:
     # =====================================================
     # NETWORK STATUS & SPEED
     # =====================================================
+    if structured_entities.get("ip") and re.search(
+        r"\b(?:detalhes|investigar|investigue|identificar|identifique|quem e|quem eh)\b",
+        t,
+    ):
+        return {
+            "intent": "network_device_details",
+            "action": "inspect",
+            "entity": "network",
+            "params": {"ip": structured_entities["ip"]},
+            "confidence": 1.0,
+        }
+
     if "velocidade da internet" in t or "teste de velocidade" in t or "speedtest" in t:
         return {
             "intent": "network_speed",
@@ -387,6 +400,17 @@ def apply_rules(text: str) -> Optional[Dict]:
     # =====================================================
     # BLOQUEIO DE DISPOSITIVO (PREPARADO – PASSO 9)
     # =====================================================
+    ip = structured_entities.get("ip")
+    if ip and re.search(r"\b(?:bloquear|bloqueia|cortar|negar)\b", t):
+        return {
+            "intent": "network_block_device",
+            "action": "request",
+            "entity": "network",
+            "params": {"ip": ip, "target": ip},
+            "requires_confirmation": True,
+            "confidence": 1.0,
+        }
+
     if re.search(r"\b(bloquear dispositivo|bloqueia esse dispositivo)\b", t):
         return {
             "intent": "network_block_device",
@@ -399,6 +423,17 @@ def apply_rules(text: str) -> Optional[Dict]:
     # =====================================================
     # BLOQUEIO DE SITE (ADGUARD – FUTURO)
     # =====================================================
+    domain = structured_entities.get("domain")
+    if domain and re.search(r"\b(?:bloquear|bloqueia|proibir|impedir)\b", t):
+        return {
+            "intent": "network_block_site",
+            "action": "request",
+            "entity": "network",
+            "params": {"site": domain, "domain": domain},
+            "requires_confirmation": True,
+            "confidence": 1.0,
+        }
+
     site_match = re.search(r"\b(?:bloquear|bloqueia)\s+(?:site\s+)?([a-z0-9.-]+\.[a-z]{2,})\b", t)
     if site_match:
         return {

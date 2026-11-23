@@ -59,6 +59,40 @@ class NetworkModule:
     # SCANNING HELPERS (mDNS / SSDP)
     # ==================================================
     @staticmethod
+    def is_private_mac(mac: str) -> bool:
+        """IEEE locally administered bit: common in randomized/private MACs."""
+        try:
+            return bool(int(mac.split(":")[0], 16) & 0x02)
+        except (AttributeError, ValueError, IndexError):
+            return False
+
+    @staticmethod
+    async def identify_device(ip: str, mac: str) -> Dict[str, Any]:
+        """Collect conservative identity hints without probing common ports."""
+        private_mac = NetworkModule.is_private_mac(mac)
+        hostname = await NetworkModule._resolve_hostname_deep(ip)
+        vendor = None
+        if not private_mac:
+            vendor = Persistence.get_mac_vendor(mac)
+            if not vendor:
+                try:
+                    vendor = await asyncio.to_thread(MacLookup().lookup, mac)
+                    if vendor:
+                        Persistence.set_mac_vendor(mac, vendor)
+                except Exception:
+                    vendor = None
+        device_type = NetworkModule._guess_device_type(vendor or "", [], hostname or "")
+        return {
+            "ip": ip,
+            "mac": mac.lower(),
+            "custom_name": Persistence.get_device_name(mac),
+            "hostname": hostname,
+            "vendor": vendor,
+            "guessed_type": device_type,
+            "mac_is_private": private_mac,
+        }
+
+    @staticmethod
     def _scan_ssdp(timeout: float = 2.0) -> Set[str]:
         ips = set()
         msg = (
@@ -256,7 +290,9 @@ class NetworkModule:
 
             # Vendor (cached lookup)
             cached_vendor = Persistence.get_mac_vendor(mac)
-            if cached_vendor:
+            if NetworkModule.is_private_mac(mac):
+                vendor = "MAC privado/aleatorio"
+            elif cached_vendor:
                 vendor = cached_vendor
             else:
                 try:
@@ -275,6 +311,15 @@ class NetworkModule:
             ports = await NetworkModule._check_common_ports(ip)
 
             guessed_type = NetworkModule._guess_device_type(vendor, ports, hostname)
+
+            Persistence.register_device_seen(
+                mac,
+                ip=ip,
+                hostname=hostname,
+                vendor=None if NetworkModule.is_private_mac(mac) else vendor,
+                device_type=guessed_type,
+                mac_is_private=NetworkModule.is_private_mac(mac),
+            )
 
             # Evento: Dispositivo Desconhecido
             if app and guessed_type == "Dispositivo Desconhecido" and not custom_name:

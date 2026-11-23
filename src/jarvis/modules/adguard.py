@@ -1,4 +1,5 @@
 import base64
+from collections import Counter
 import logging
 import re
 from typing import Any
@@ -168,3 +169,54 @@ class AdGuardClient:
                 }
             )
         return result
+
+    @classmethod
+    async def get_client_activity(cls, ip: str, limit: int = 50) -> dict[str, Any]:
+        """Resume o log DNS de um cliente; nao representa consumo de banda."""
+        if not cls._is_ip(ip):
+            return {"available": False, "reason": "invalid_ip"}
+
+        status, payload = await cls._request(
+            "GET",
+            "querylog",
+            params={"search": f'"{ip}"', "limit": max(1, min(limit, 100))},
+        )
+        if status != 200 or not isinstance(payload, dict):
+            return {"available": False, "reason": "adguard_unavailable"}
+
+        entries = payload.get("data", [])
+        if not isinstance(entries, list):
+            entries = []
+        domains: Counter[str] = Counter()
+        blocked = 0
+        last_query_at = None
+        matched = 0
+        for entry in entries:
+            if not isinstance(entry, dict) or str(entry.get("client", "")) != ip:
+                continue
+            matched += 1
+            question = entry.get("question", {})
+            domain = question.get("name") if isinstance(question, dict) else None
+            if domain:
+                domains[str(domain).rstrip(".").lower()] += 1
+            reason = str(entry.get("reason") or "")
+            if reason in {
+                "FilteredBlackList",
+                "FilteredSafeBrowsing",
+                "FilteredParental",
+                "FilteredBlockedService",
+            }:
+                blocked += 1
+            timestamp = entry.get("time")
+            if timestamp and (last_query_at is None or str(timestamp) > str(last_query_at)):
+                last_query_at = timestamp
+
+        return {
+            "available": True,
+            "dns_queries_sampled": matched,
+            "blocked_sampled": blocked,
+            "unique_domains": len(domains),
+            "top_domains": [name for name, _ in domains.most_common(5)],
+            "last_query_at": last_query_at,
+            "is_bandwidth": False,
+        }
