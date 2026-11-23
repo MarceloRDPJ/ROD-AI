@@ -176,6 +176,18 @@ def apply_rules(text: str, structured_entities: Optional[Dict] = None) -> Option
     # =====================================================
     # NETWORK STATUS & SPEED
     # =====================================================
+    if structured_entities.get("ip") and re.search(
+        r"\b(?:detalhes|investigar|investigue|identificar|identifique|quem e|quem eh)\b",
+        t,
+    ):
+        return {
+            "intent": "network_device_details",
+            "action": "inspect",
+            "entity": "network",
+            "params": {"ip": structured_entities["ip"]},
+            "confidence": 1.0,
+        }
+
     if "velocidade da internet" in t or "teste de velocidade" in t or "speedtest" in t:
         return {
             "intent": "network_speed",

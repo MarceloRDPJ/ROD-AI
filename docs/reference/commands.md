@@ -5,6 +5,7 @@
 - `status`, `status do raspi`, `temperatura do pi`
 - `speed`, `sped`, `sped treste`, `qual a velocidade da net`
 - `ping`, `dispositivos da rede`, `menu rede`
+- `investigar 192.168.1.77`, `detalhes 192.168.1.77` ou o botão `Detalhes` do alerta
 - estatísticas do AdGuard
 - `bloquear 192.168.1.77` ou `bloquear youtube.com`, sempre com confirmação
 - depois de um alerta recente, `bloquear ele` resolve apenas o dispositivo daquele alerta e ainda pede confirmação
@@ -12,6 +13,8 @@
 - `ligar pc` quando `PC_MAC` estiver configurado
 
 O speedtest mede a conexão vista pelo Raspberry Pi e fica limitado pela Ethernet de 100 Mbit/s do Pi 3B.
+
+O dossiê de um dispositivo mostra histórico e atividade DNS verificáveis. Ele não chama um aparelho de invasor sem evidência, não identifica com certeza o modelo apenas pelo MAC e não apresenta consultas DNS como megabytes consumidos.
 
 ## Organização pessoal
 

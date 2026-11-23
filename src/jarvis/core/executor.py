@@ -15,6 +15,7 @@ from jarvis.modules.system import SystemModule
 from jarvis.modules.network import NetworkModule
 from jarvis.modules.hydration import HydrationModule
 from jarvis.modules.adguard import AdGuardClient
+from jarvis.services.device_intelligence import DeviceIntelligence
 from datetime import datetime
 from jarvis.config import Config
 import os
@@ -516,6 +517,14 @@ class Executor:
         if intent == "network_status":
             return await NetworkModule.check_ping()
 
+        if intent == "network_device_details":
+            ip = params.get("ip") or params.get("target")
+            mac = await NetworkModule.resolve_mac_by_ip(ip) if ip else None
+            if not mac:
+                return f"Nao encontrei o dispositivo {ip or ''} na rede agora."
+            dossier = await DeviceIntelligence.dossier(ip, mac)
+            return DeviceIntelligence.format_dossier(dossier)
+
         if intent == "network_rename":
             target = params.get("target")
             new_name = params.get("name")
@@ -872,6 +881,16 @@ class Executor:
 
         if action == "ignore":
             await query.edit_message_text("👁️ Dispositivo ignorado.")
+            return
+
+        if action == "info":
+            ip = parts[2]
+            mac = parts[3] if len(parts) > 3 else await NetworkModule.resolve_mac_by_ip(ip)
+            if not mac:
+                await query.edit_message_text("Nao consegui obter o MAC desse IP agora.")
+                return
+            dossier = await DeviceIntelligence.dossier(ip, mac)
+            await query.edit_message_text(DeviceIntelligence.format_dossier(dossier))
             return
 
         if action == "block":

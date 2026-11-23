@@ -7,12 +7,13 @@ def build_unknown_device_markup(ip: str, mac: str):
 
     keyboard = [
         [
+            InlineKeyboardButton("🔎 Detalhes", callback_data=f"net_info_{ip}_{mac}"),
             InlineKeyboardButton("📝 Cadastrar", callback_data=f"net_reg_{ip}_{mac}"),
-            InlineKeyboardButton("🚫 Bloquear", callback_data=f"net_block_{ip}")
         ],
         [
-            InlineKeyboardButton("👁️ Ignorar", callback_data="net_ignore")
-        ]
+            InlineKeyboardButton("🚫 Bloquear", callback_data=f"net_block_{ip}"),
+            InlineKeyboardButton("👁️ Ignorar", callback_data="net_ignore"),
+        ],
     ]
     return InlineKeyboardMarkup(keyboard)
 
