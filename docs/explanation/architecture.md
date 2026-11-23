@@ -70,4 +70,6 @@ A distinção é verificável pelo uptime do host: numa queda real o Raspberry P
 
 Relatórios e automações por horário disparam uma única vez por período, dentro de uma janela de tolerância de cinco minutos. Os laços de serviço acordam a cada 60 segundos e derivam alguns segundos a cada volta; comparar o minuto por igualdade exata perdia o disparo quando a volta caía fora do minuto, e repetia quando duas voltas caíam dentro dele. A mesma janela impede que um horário vencido há horas seja reenviado atrasado depois de um restart.
 
-Todo horário agendado é lido em `Config.TIMEZONE`, nunca na hora local do processo. A imagem instala `tzdata` para que o `TZ` do Compose também valha para logs e para qualquer leitura de hora local remanescente.
+Todo horário agendado é lido em `Config.TIMEZONE`, nunca na hora local do processo. Não por falta de fuso no contêiner: a imagem `python:3.12-slim` já traz `tzdata`, e o `TZ` do Compose resolve corretamente — verificado no Pi, onde `date` dentro do contêiner responde `-03`. O `tzdata` consta do `Dockerfile` apenas para declarar a dependência em vez de herdá-la da imagem base.
+
+A razão de ler sempre `Config.TIMEZONE` é outra: data e hora **ingênuas** atravessam camadas com significados diferentes. O scheduler trata um `target_date` sem fuso como UTC, enquanto quem o gravava usava a hora local do processo. Com o fuso resolvendo em `-03`, um lembrete criado pelo fallback de `flows` disparava três horas adiantado. Gravar sempre com fuso explícito elimina a ambiguidade na origem.
