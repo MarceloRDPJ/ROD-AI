@@ -19,7 +19,7 @@ from jarvis.core.executor import Executor
 from jarvis.core import router
 from jarvis.database.persistence import Persistence
 from jarvis.core.events import Event
-from jarvis.core.telegram_safe import safe_reply_text
+from jarvis.core.telegram_safe import DEFAULT_PARSE_MODE, safe_reply_text
 
 from jarvis.services.collector import CollectorService
 from jarvis.services.scheduler import SchedulerService
@@ -274,6 +274,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                   await query.edit_message_text(
                        text=response.get("text", ""),
                        reply_markup=response.get("reply_markup"),
+                       parse_mode=DEFAULT_PARSE_MODE,
                   )
              except BadRequest:
                   await safe_reply_text(
@@ -283,7 +284,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                   )
         else:
              try:
-                  await query.edit_message_text(text=response)
+                  await query.edit_message_text(text=response, parse_mode=DEFAULT_PARSE_MODE)
              except BadRequest:
                   await safe_reply_text(query.message, response)
 

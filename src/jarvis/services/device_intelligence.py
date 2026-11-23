@@ -5,6 +5,7 @@ from typing import Any
 
 from jarvis.database.persistence import Persistence
 from jarvis.modules.adguard import AdGuardClient
+from jarvis.core.telegram_safe import sanitize_inline_value
 from jarvis.modules.network import NetworkModule
 
 
@@ -47,51 +48,57 @@ class DeviceIntelligence:
     def format_dossier(data: dict[str, Any], *, alert: bool = False) -> str:
         profile = data["profile"]
         activity = data["activity"]
-        name = profile.get("name") or profile.get("custom_name")
-        hostname = profile.get("hostname")
-        vendor = profile.get("vendor")
+        # Nome, hostname e fabricante sao anunciados pelo proprio aparelho. O
+        # Markdown legado do Telegram nao aceita escape, entao um hostname com
+        # `*` ou `_` desformataria a mensagem inteira.
+        name = sanitize_inline_value(profile.get("name") or profile.get("custom_name")) or None
+        hostname = sanitize_inline_value(profile.get("hostname")) or None
+        vendor = sanitize_inline_value(profile.get("vendor")) or None
         device_type = profile.get("device_type") or profile.get("guessed_type")
         ip = profile.get("last_ip") or data["identity"].get("ip") or "?"
         mac = data["identity"].get("mac") or profile.get("mac") or "?"
-        title = "Novo dispositivo observado" if alert else "Dossie do dispositivo"
+        title = "Novo dispositivo observado" if alert else "Dossiê do dispositivo"
 
         identity_bits = [item for item in (name, hostname, device_type, vendor) if item and item != "Dispositivo Desconhecido"]
-        identity_text = " / ".join(dict.fromkeys(identity_bits)) or "nao identificado"
+        identity_text = " / ".join(dict.fromkeys(identity_bits)) or "não identificado"
         ips = [item.get("ip") for item in profile.get("ips", []) if item.get("ip")]
 
         lines = [
             f"🔎 *{title}*",
-            f"Identificacao: *{identity_text}*",
+            f"Identificação: *{identity_text}*",
             f"IP atual: `{ip}`",
             f"MAC: `{mac}`",
             f"Primeira vez: {DeviceIntelligence._date(profile.get('first_seen'))}",
-            f"Ultima vez: {DeviceIntelligence._date(profile.get('last_seen'))}",
-            f"Leituras do guardiao: {int(profile.get('seen_count') or 0)}",
-            f"IPs ja usados: {', '.join(ips) if ips else ip}",
+            f"Última vez: {DeviceIntelligence._date(profile.get('last_seen'))}",
+            f"Leituras do guardião: {int(profile.get('seen_count') or 0)}",
+            f"IPs já usados: {', '.join(ips) if ips else ip}",
         ]
 
         if profile.get("mac_is_private"):
-            lines.append("⚠️ MAC privado/aleatorio: o fabricante pelo prefixo nao e confiavel e o aparelho pode reaparecer com outro MAC.")
+            lines.append("⚠️ MAC privado/aleatório: o fabricante pelo prefixo não é confiável e o aparelho pode reaparecer com outro MAC.")
         elif vendor:
-            lines.append(f"Fabricante pelo OUI: {vendor} (indicio, nao prova do modelo).")
+            lines.append(f"Fabricante pelo OUI: {vendor} (indício, não prova do modelo).")
 
         if activity.get("available"):
             count = activity.get("dns_queries_sampled", 0)
             domains = activity.get("top_domains", [])
             lines.append(f"Atividade DNS: {count} consultas na amostra; {activity.get('blocked_sampled', 0)} bloqueadas.")
             if domains:
-                lines.append(f"Dominios mais vistos: {', '.join(domains)}")
+                lines.append(f"Domínios mais vistos: {', '.join(domains)}")
         else:
-            lines.append("Atividade DNS: AdGuard sem dados disponiveis para este IP.")
+            lines.append("Atividade DNS: AdGuard sem dados disponíveis para este IP.")
 
         known = bool(name)
         repeated = int(profile.get("seen_count") or 0) > 1
         if known:
-            assessment = "cadastrado por voce; sem evidencia local de invasao."
+            assessment = "cadastrado por você; sem evidência local de invasão."
         elif repeated:
-            assessment = "ja apareceu antes, mas continua sem dono confirmado."
+            assessment = "já apareceu antes, mas continua sem dono confirmado."
         else:
-            assessment = "primeira observacao; identidade ainda insuficiente."
-        lines.append(f"Avaliacao: {assessment}")
-        lines.append("Limite: DNS nao mede bytes consumidos e o Pi nao sabe o comodo/local fisico sem telemetria do roteador ou AP.")
+            assessment = "primeira observação; identidade ainda insuficiente."
+        lines.append(f"Avaliação: {assessment}")
+        lines.append(
+            "Limite: DNS não mede bytes consumidos, e o Pi não sabe o cômodo nem o local "
+            "físico sem telemetria do roteador ou do ponto de acesso."
+        )
         return "\n".join(lines)
