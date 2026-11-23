@@ -321,7 +321,10 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                        reply_markup=response.get("reply_markup"),
                   )
         else:
-             await safe_reply_text(query.message, response)
+             try:
+                  await query.edit_message_text(text=response)
+             except BadRequest:
+                  await safe_reply_text(query.message, response)
 
     except Exception as e:
         logger.exception("Erro crítico no handle_callback")

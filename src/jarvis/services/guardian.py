@@ -4,8 +4,10 @@ import time
 from typing import Dict, Any, List, Set, Optional
 
 from jarvis.core.context_reader import ContextReader
+from jarvis.core.context import ContextEngine
 from jarvis.modules.network import NetworkModule
 from jarvis.database.persistence import Persistence
+from jarvis.services.automation_helpers import build_unknown_device_markup
 
 logger = logging.getLogger("services.guardian")
 
@@ -196,10 +198,11 @@ class GuardianService:
                     f"🕵️‍♂️ *Novo dispositivo detectado*\n"
                     f"IP: `{ip}`\n"
                     f"MAC: `{mac}`\n\n"
-                    f"Para nomear, diga:\n"
-                    f"`Renomear {ip} para [NOME]`"
+                    f"Escolha uma ação abaixo. Bloquear sempre exige confirmação."
                 )
-                await self.send_message(msg)
+                ContextEngine.set_network_target(self.chat_id, ip, mac)
+                logger.info("Novo dispositivo observado: ip=%s mac=%s", ip, mac)
+                await self.send_message(msg, reply_markup=build_unknown_device_markup(ip, mac))
                 self._debounce_tracker[mac] = now
 
             # Registra imediatamente para não avisar de novo
@@ -210,9 +213,13 @@ class GuardianService:
         # Avisar saída gera muito spam em WiFi moderno (sleep mode).
         pass
 
-    async def send_message(self, text: str) -> bool:
+    async def send_message(self, text: str, reply_markup=None) -> bool:
         try:
-            await self.app.bot.send_message(chat_id=self.chat_id, text=text)
+            await self.app.bot.send_message(
+                chat_id=self.chat_id,
+                text=text,
+                reply_markup=reply_markup,
+            )
             return True
         except Exception:
             return False

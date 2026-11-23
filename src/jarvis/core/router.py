@@ -3,6 +3,7 @@ from jarvis.nlp.intent_engine import detect_intent
 from jarvis.core.brain import Brain
 from jarvis.core.context import ContextEngine
 from jarvis.nlp.normalizer import normalize_text
+from jarvis.nlp.entities import extract_structured_entities
 from jarvis.config import Config
 from datetime import datetime, timezone
 import logging
@@ -21,6 +22,10 @@ MANAGEMENT_INTENTS = {
     "hydration_control", "hydration_status", "hydration_update", "hydration_activate",
     "hydration_log_explicit",
     "token_usage", "daily_report", "unknown_queries",
+}
+
+SENSITIVE_INTENTS = {
+    "network_block", "network_unblock", "network_block_device", "network_block_site",
 }
 
 # Consultas sem efeito colateral podem aceitar mais variação ortográfica.
@@ -102,6 +107,21 @@ def _make_result(intent, action, entity, confidence, source, params=None, text="
     }
 
 
+def _make_rule_result(rule: dict, text: str) -> dict:
+    result = _make_result(
+        rule["intent"],
+        rule.get("action"),
+        rule.get("entity"),
+        1.0,
+        "rule",
+        rule.get("params", {}),
+        text,
+    )
+    if "requires_confirmation" in rule:
+        result["requires_confirmation"] = bool(rule["requires_confirmation"])
+    return result
+
+
 def _check_flow_timeout(chat_id: int, flow: dict, context: dict) -> bool:
     flow_ts = flow.get("timestamp") or context.get("timestamp")
     if not flow_ts:
@@ -117,6 +137,8 @@ def _check_flow_timeout(chat_id: int, flow: dict, context: dict) -> bool:
 
 
 async def route(text: str, chat_id: int = None):
+    raw_text = text
+    structured_entities = extract_structured_entities(raw_text)
     text = normalize_text(text)
 
     if _is_llm_status(text):
@@ -125,15 +147,51 @@ async def route(text: str, chat_id: int = None):
     # ============================================================
     # 1. REGRAS DE SEGURANÇA & INTERRUPÇÃO DE FLUXO
     # ============================================================
-    rule = apply_rules(text)
+    rule = apply_rules(text, structured_entities)
 
-    if rule and rule["intent"] in MANAGEMENT_INTENTS:
+    if not rule and structured_entities.get("ip") and re.search(r"\b(?:renomear|renomeia|nomear)\b", text):
+        name_match = re.search(r"\b(?:para|por|como)\s+(.+)$", raw_text, re.IGNORECASE)
+        name = name_match.group(1).strip() if name_match else None
+        if name:
+            rule = {
+                "intent": "network_rename",
+                "action": "rename",
+                "entity": "network",
+                "params": {
+                    "target": structured_entities["ip"],
+                    "name": name,
+                    "text": raw_text,
+                },
+                "confidence": 1.0,
+            }
+
+    # Pronouns are only resolved for a recent, explicit network alert/action.
+    # This keeps "bloquear ele" useful without making fuzzy destructive guesses.
+    if rule and rule.get("intent") == "network_block_device" and not rule.get("params", {}).get("ip"):
+        target = ContextEngine.get_recent_network_target(chat_id) if chat_id else None
+        if target:
+            rule["params"] = {"ip": target["ip"], "target": target["ip"], "mac": target.get("mac")}
+
+    contextual_block = text in {
+        "bloquear ele", "bloqueia ele", "bloquear esse", "bloqueia esse",
+        "bloquear isso", "bloqueia isso",
+    }
+    if not rule and contextual_block and chat_id:
+        target = ContextEngine.get_recent_network_target(chat_id)
+        if target:
+            rule = {
+                "intent": "network_block_device",
+                "action": "request",
+                "entity": "network",
+                "params": {"ip": target["ip"], "target": target["ip"], "mac": target.get("mac")},
+                "requires_confirmation": True,
+                "confidence": 1.0,
+            }
+
+    if rule and rule["intent"] in MANAGEMENT_INTENTS | SENSITIVE_INTENTS:
         if chat_id:
             ContextEngine.save_context(chat_id, {"flow": None})
-        return _make_result(
-            rule["intent"], rule["action"], rule["entity"],
-            1.0, "rule", rule.get("params", {}), text,
-        )
+        return _make_rule_result(rule, text)
 
     # ============================================================
     # 2. FLUXO ATIVO (com timeout)
@@ -154,10 +212,7 @@ async def route(text: str, chat_id: int = None):
         if rule["intent"] == "reminder_set" and rule.get("action") == "create":
             pass  # deixa o NLP/brain interpretar melhor
         else:
-            return _make_result(
-                rule["intent"], rule["action"], rule["entity"],
-                1.0, "rule", rule.get("params", {}), text,
-            )
+            return _make_rule_result(rule, text)
 
     # ============================================================
     # 4. CLASSIFICAÇÃO LEVE (sem LLM) — sinaliza comandos explícitos
@@ -171,6 +226,22 @@ async def route(text: str, chat_id: int = None):
     # ============================================================
     nlp_intent = detect_intent(text)
     if nlp_intent and nlp_intent.get("intent") not in ("chat", "unknown"):
+        # State-changing actions are accepted only by deterministic rules with
+        # validated entities or explicit recent context, never by fuzzy matching.
+        if nlp_intent.get("intent") in SENSITIVE_INTENTS:
+            logger.info("Intent sensível rejeitada no fuzzy matcher: %s", nlp_intent.get("intent"))
+            return await brain.process_intent(text, chat_id=chat_id)
+
+        if nlp_intent.get("intent") == "network_rename" and structured_entities.get("ip"):
+            name_match = re.search(r"\b(?:para|por|como)\s+(.+)$", raw_text, re.IGNORECASE)
+            name = name_match.group(1).strip() if name_match else None
+            nlp_intent["target"] = structured_entities["ip"]
+            nlp_intent["name"] = name
+            nlp_intent["params"] = {
+                "target": structured_entities["ip"],
+                "name": name,
+                "text": raw_text,
+            }
         confidence = nlp_intent.get("confidence", 0)
         required_confidence = (
             0.72 if nlp_intent.get("intent") in TYPO_TOLERANT_INTENTS

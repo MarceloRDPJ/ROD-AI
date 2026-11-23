@@ -137,6 +137,35 @@ class ContextEngine:
     def clear_pending_action(chat_id: int) -> None:
         Persistence.set_state(f"pending_action:{chat_id}", None)
 
+    @staticmethod
+    def set_network_target(chat_id: int, ip: str, mac: str | None = None) -> None:
+        """Remember the device referenced by the latest network interaction."""
+        ContextEngine.save_context(
+            chat_id,
+            {
+                "network_target": {
+                    "ip": ip,
+                    "mac": mac,
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                }
+            },
+        )
+
+    @staticmethod
+    def get_recent_network_target(chat_id: int, minutes: int = 15) -> Optional[Dict[str, Any]]:
+        target = ContextEngine.get_context(chat_id).get("network_target")
+        if not isinstance(target, dict) or not target.get("ip") or not target.get("timestamp"):
+            return None
+        try:
+            timestamp = datetime.fromisoformat(str(target["timestamp"]))
+            if timestamp.tzinfo is None:
+                timestamp = timestamp.replace(tzinfo=timezone.utc)
+            if datetime.now(timezone.utc) - timestamp > timedelta(minutes=minutes):
+                return None
+        except (TypeError, ValueError):
+            return None
+        return target
+
     # ==================================================
     # COMPARAÇÃO PROFUNDA (BASE DA INTELIGÊNCIA)
     # ==================================================

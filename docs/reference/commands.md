@@ -5,7 +5,10 @@
 - `status`, `status do raspi`, `temperatura do pi`
 - `speed`, `sped`, `sped treste`, `qual a velocidade da net`
 - `ping`, `dispositivos da rede`, `menu rede`
-- estatísticas do AdGuard e bloqueios confirmados
+- estatísticas do AdGuard
+- `bloquear 192.168.1.77` ou `bloquear youtube.com`, sempre com confirmação
+- depois de um alerta recente, `bloquear ele` resolve apenas o dispositivo daquele alerta e ainda pede confirmação
+- `renomear 192.168.1.77 para TV Sala`
 - `ligar pc` quando `PC_MAC` estiver configurado
 
 O speedtest mede a conexão vista pelo Raspberry Pi e fica limitado pela Ethernet de 100 Mbit/s do Pi 3B.
@@ -18,4 +21,4 @@ O speedtest mede a conexão vista pelo Raspberry Pi e fica limitado pela Etherne
 
 ## Segurança
 
-Frases ambíguas como `bluqear sit` não acionam bloqueio. Ações que alteram estado exigem uma intenção forte e confirmação. Assuntos fora das skills recebem uma orientação curta, sem resposta inventada.
+Frases ambíguas como `bluqear sit` não acionam bloqueio. Ações que alteram estado exigem verbo explícito, alvo válido e confirmação. A confirmação pode ser feita pelo botão ou por `confirmar`; ela expira em 15 minutos e sobrevive a reinícios do contêiner. Assuntos fora das skills recebem uma orientação curta com atalhos para Sistema, Rede, Agenda e Menu, sem resposta inventada.

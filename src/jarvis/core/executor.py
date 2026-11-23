@@ -38,7 +38,6 @@ class Executor:
     def __init__(self, application):
         self.app = application
         Persistence.init_db()
-        self.pending_actions: Dict[int, Dict[str, Any]] = {}
         logger.info("Executor inicializado com sucesso.")
 
     async def execute(self, intent_data: Dict[str, Any], chat_id: int) -> str:
@@ -77,8 +76,14 @@ class Executor:
             requires_confirmation = True
 
         if requires_confirmation:
-            self.pending_actions[chat_id] = intent_data
-            return "⚠️ *Ação sensível detectada.* Digite **confirmar** ou **cancelar**."
+            validation_error = self._validate_sensitive_action(intent, params)
+            if validation_error:
+                return validation_error
+            ContextEngine.set_pending_action(chat_id, intent_data)
+            return self._confirmation_prompt(intent, params)
+
+        if intent == "chat" and intent_data.get("source") == "local_clarification":
+            return self._clarification_prompt(params.get("response", Personality.get_response("FALLBACK")))
 
         return await self._execute_intent(intent, action, params, chat_id)
 
@@ -233,7 +238,10 @@ class Executor:
 
                 if flow.get("type") == "reminder_reschedule":
                     return RemindersFlow.handle_reschedule_response(chat_id, text_input, ctx)
-            return RemindersFlow.handle_response(chat_id, text_input, ctx)
+            return self._decorate_reminder_flow_response(
+                chat_id,
+                RemindersFlow.handle_response(chat_id, text_input, ctx),
+            )
 
         # ---------------- STANDARD INTENTS ----------------
         if intent == "chat": return params.get("response", Personality.get_response("FALLBACK"))
@@ -560,10 +568,10 @@ class Executor:
                 return "❌ Wake-on-LAN ainda não está configurado no Pi."
             # Confirmação para ação sensível
             if not params.get("confirmed"):
-                self.pending_actions[chat_id] = {
+                ContextEngine.set_pending_action(chat_id, {
                     "intent": "wake_pc",
                     "params": {"confirmed": True}
-                }
+                })
                 return (
                     "🖥️ *Wake-on-LAN*\n\n"
                     "Vou enviar pacote mágico para ligar o PC.\n\n"
@@ -603,7 +611,11 @@ class Executor:
             except: return "❌ Erro ao analisar histórico."
 
         if intent == "reminder_set":
-            if action == "create_request": return RemindersFlow.start_flow(chat_id, params)
+            if action == "create_request":
+                return self._decorate_reminder_flow_response(
+                    chat_id,
+                    RemindersFlow.start_flow(chat_id, params),
+                )
             return "Modo de criação direta descontinuado. Use fluxo interativo."
 
         if intent == "reminder_list":
@@ -756,16 +768,100 @@ class Executor:
         return msg
 
     async def _confirm_action(self, chat_id: int) -> str:
-        pending = self.pending_actions.pop(chat_id, None)
-        if not pending: return "⚠️ Nenhuma ação pendente para confirmar."
-        logger.info(f"Ação confirmada pelo usuário: {pending}")
-        return await self._execute_intent(pending.get("intent"), pending.get("action", "default"), pending.get("params", {}), chat_id)
+        stored = ContextEngine.get_pending_action(chat_id)
+        if not stored or not isinstance(stored.get("action"), dict):
+            return "⚠️ Nenhuma ação pendente para confirmar."
+        try:
+            timestamp = datetime.fromisoformat(stored["timestamp"])
+            now = datetime.now(timestamp.tzinfo) if timestamp.tzinfo else datetime.now()
+            if (now - timestamp).total_seconds() > 15 * 60:
+                ContextEngine.clear_pending_action(chat_id)
+                return "⏳ Essa confirmação expirou. Envie o comando novamente."
+        except (KeyError, TypeError, ValueError):
+            ContextEngine.clear_pending_action(chat_id)
+            return "⚠️ A confirmação pendente estava inválida. Envie o comando novamente."
+
+        pending = stored["action"]
+        ContextEngine.clear_pending_action(chat_id)
+        logger.info("Ação sensível confirmada: intent=%s", pending.get("intent"))
+        return await self._execute_intent(
+            pending.get("intent"),
+            pending.get("action", "default"),
+            pending.get("params", {}),
+            chat_id,
+        )
 
     def _cancel_action(self, chat_id: int) -> str:
-        if chat_id in self.pending_actions:
-            self.pending_actions.pop(chat_id)
+        if ContextEngine.get_pending_action(chat_id):
+            ContextEngine.clear_pending_action(chat_id)
             return "🛑 Ação cancelada com sucesso."
         return "⚠️ Nenhuma ação pendente para cancelar."
+
+    @staticmethod
+    def _validate_sensitive_action(intent: str, params: Dict[str, Any]) -> str | None:
+        if intent == "network_block_device":
+            ip = params.get("ip") or params.get("target")
+            if not AdGuardClient._is_ip(ip):
+                return "Não sei qual dispositivo bloquear. Envie o IP ou use o botão do alerta."
+        if intent == "network_block_site":
+            domain = params.get("site") or params.get("domain")
+            if not AdGuardClient._is_domain(domain or ""):
+                return "Não identifiquei um domínio válido. Exemplo: bloquear youtube.com"
+        return None
+
+    @staticmethod
+    def _confirmation_prompt(intent: str, params: Dict[str, Any]) -> Dict[str, Any]:
+        from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+
+        if intent == "network_block_device":
+            detail = f"Bloquear o dispositivo {params.get('ip') or params.get('target')} no AdGuard?"
+        elif intent == "network_block_site":
+            detail = f"Bloquear o site {params.get('site') or params.get('domain')} no AdGuard?"
+        else:
+            detail = "Executar esta ação sensível?"
+        keyboard = InlineKeyboardMarkup(
+            [[
+                InlineKeyboardButton("Confirmar", callback_data="confirmar"),
+                InlineKeyboardButton("Cancelar", callback_data="cancelar"),
+            ]]
+        )
+        return {"text": f"⚠️ {detail}\n\nA confirmação expira em 15 minutos.", "reply_markup": keyboard}
+
+    @staticmethod
+    def _clarification_prompt(message: str) -> Dict[str, Any]:
+        from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+
+        keyboard = InlineKeyboardMarkup(
+            [
+                [
+                    InlineKeyboardButton("Sistema", callback_data="menu_sistema"),
+                    InlineKeyboardButton("Rede", callback_data="menu_rede"),
+                ],
+                [
+                    InlineKeyboardButton("Agenda", callback_data="menu_agenda"),
+                    InlineKeyboardButton("Menu", callback_data="help"),
+                ],
+            ]
+        )
+        return {"text": message, "reply_markup": keyboard}
+
+    @staticmethod
+    def _decorate_reminder_flow_response(chat_id: int, response: Any) -> Any:
+        flow = ContextEngine.get_context(chat_id).get("flow")
+        if not isinstance(flow, dict) or flow.get("type") != "reminder_creation":
+            return response
+        if flow.get("step") != "confirmation" or not isinstance(response, str):
+            return response
+
+        from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+
+        keyboard = InlineKeyboardMarkup(
+            [[
+                InlineKeyboardButton("Confirmar", callback_data="sim"),
+                InlineKeyboardButton("Cancelar", callback_data="nao"),
+            ]]
+        )
+        return {"text": response, "reply_markup": keyboard}
 
     async def handle_network_callback(self, chat_id: int, data: str, query):
         """
@@ -780,13 +876,17 @@ class Executor:
 
         if action == "block":
             ip = parts[2]
-            self.pending_actions[chat_id] = {
+            ContextEngine.save_context(chat_id, {"flow": None})
+            ContextEngine.set_network_target(chat_id, ip)
+            ContextEngine.set_pending_action(chat_id, {
                 "intent": "network_block_device",
                 "action": "block",
                 "params": {"ip": ip, "confirmed": True},
-            }
+            })
+            confirmation = self._confirmation_prompt("network_block_device", {"ip": ip})
             await query.edit_message_text(
-                f"Bloquear o dispositivo {ip} no AdGuard?\n\nDigite confirmar para executar ou cancelar para abortar."
+                text=confirmation["text"],
+                reply_markup=confirmation["reply_markup"],
             )
             return
 

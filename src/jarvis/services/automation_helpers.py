@@ -1,7 +1,5 @@
-def _build_unknown_device_markup(event):
+def build_unknown_device_markup(ip: str, mac: str):
     from telegram import InlineKeyboardMarkup, InlineKeyboardButton
-    ip = event.payload.get('ip')
-    mac = event.payload.get('mac')
 
     # Callback data must be short (64 bytes limit)
     # net_reg_{ip}_{mac} might be too long.
@@ -17,3 +15,11 @@ def _build_unknown_device_markup(event):
         ]
     ]
     return InlineKeyboardMarkup(keyboard)
+
+
+def _build_unknown_device_markup(event):
+    """Compatibility adapter for the event-based automation engine."""
+    return build_unknown_device_markup(
+        event.payload.get("ip"),
+        event.payload.get("mac"),
+    )
