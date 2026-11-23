@@ -94,3 +94,17 @@ Duas proteções acompanham essa escolha:
 
 - Erro de parse reenvia o mesmo conteúdo sem marcação. Perder o negrito é preferível a perder a mensagem. A limpeza remove apenas o que o Markdown legado interpreta (`` ` ``, `*`, `_`, `[`, `]`); antes ela também removia ponto e hífen, destruindo IP, data e horário justamente na mensagem de recuperação.
 - Nome, hostname e fabricante são anunciados pelo próprio aparelho da rede. O Markdown legado do Telegram não aceita escape, então esses valores passam por `sanitize_inline_value` antes de entrar na mensagem — num nome DNS ou fabricante esses caracteres não carregam informação.
+
+## Menus e divulgação progressiva
+
+Os menus vivem em `core/menus.py`, separados da execução. O menu principal mostra apenas as áreas — Rede, Agenda, Água, Sistema, Automações — e cada área mostra só os próprios comandos. Antes, `comandos` despejava o catálogo inteiro: mais de 40 linhas de bullet numa mensagem só, que é referência e não interface. `ajuda` e `comandos` abrem o mesmo menu.
+
+Três regras sustentam isso, e cada uma tem teste:
+
+- **Os botões são a lista.** Repetir cada rótulo no texto acima deles dobra o que o leitor precisa varrer, então o texto do menu principal cabe em poucas linhas e o teclado fala por si.
+- **Todo botão leva a algum lugar.** Cada `callback_data` é roteado no teste e precisa virar uma intent específica. Cair em `chat` ou `small_talk` reprova: um botão que parece funcionar e não faz nada é pior que botão nenhum.
+- **Nada de anunciar o que não existe.** A ajuda antiga prometia "botões de Pix copia e cola, boleto em PDF" — recurso que nunca foi implementado; só existia `financeiro` como categoria de lembrete. O teste barra a volta dessas promessas.
+
+Hidratação ganhou área própria; antes dividia espaço com a agenda, o que escondia metade dos comandos de cada uma.
+
+O código foi escrito com `**negrito**`, sintaxe do Markdown moderno, enquanto o modo legado do Telegram usa um asterisco só. A conversão acontece em `normalize_markup`, dentro dos remetentes seguros — único ponto por onde todo texto passa. Fazer isso arquivo a arquivo esbarraria em `**kwargs` do próprio Python e em `***TOKEN***` do sanitizador de logs.

@@ -34,7 +34,7 @@ TYPO_TOLERANT_INTENTS = {
     "system_status", "network_status", "network_speed", "network_stats",
     "network_scan", "network_device_details", "reminder_list", "reminder_today", "reminder_overdue",
     "hydration_status", "hydration_analytics", "help", "command_list",
-    "menu_rede", "menu_agenda", "menu_automacoes", "menu_sistema",
+    "menu_rede", "menu_agenda", "menu_agua", "menu_automacoes", "menu_sistema",
     "daily_report",
 }
 
