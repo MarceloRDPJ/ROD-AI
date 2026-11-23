@@ -56,6 +56,12 @@ def sanitize_inline_value(value) -> str:
     return re.sub(_MARKDOWN_ENTITY_CHARS, "", str(value))
 
 
+def _is_parse_error(error) -> bool:
+    """O Telegram recusou a marcacao, e nao a mensagem."""
+    text = str(error).lower()
+    return "parse entit" in text or "can't parse" in text or "cant parse" in text
+
+
 async def _dispatch(send, text, reply_markup, parse_mode):
     """Envia em blocos e nunca derruba o chamador.
 
@@ -84,8 +90,7 @@ async def _dispatch(send, text, reply_markup, parse_mode):
         except Exception as e:
             # Alguns adaptadores/mocks não preservam BadRequest, mas mantêm a
             # mensagem oficial do Telegram. Só fazemos retry para esse caso.
-            is_parse_error = parse_mode and "parse entit" in str(e).lower()
-            if is_parse_error:
+            if parse_mode and _is_parse_error(e):
                 await retry_as_plain_text(chunk, kwargs, e)
             else:
                 logger.exception("Falha inesperada ao enviar mensagem Telegram")
@@ -98,7 +103,7 @@ async def safe_reply_text(message, text, reply_markup=None, parse_mode=_UNSET):
     await _dispatch(message.reply_text, text, reply_markup, parse_mode)
 
 
-async def safe_send_message(bot, chat_id, text, reply_markup=None, parse_mode=_UNSET) -> bool:
+async def safe_send_message(bot, chat_id, text, reply_markup=None, parse_mode=_UNSET, **extra) -> bool:
     """Envia mensagem proativa (guardião, lembretes, relatórios) com a mesma rede de proteção.
 
     Retorna se algo chegou a ser enviado, que é o sinal usado para decidir se
@@ -111,8 +116,36 @@ async def safe_send_message(bot, chat_id, text, reply_markup=None, parse_mode=_U
 
     async def send(chunk, **kwargs):
         nonlocal sent
-        await bot.send_message(chat_id=chat_id, text=chunk, **kwargs)
+        await bot.send_message(chat_id=chat_id, text=chunk, **kwargs, **extra)
         sent = True
 
     await _dispatch(send, text, reply_markup, parse_mode)
     return sent
+
+
+async def safe_edit_text(edit, text, reply_markup=_UNSET, parse_mode=_UNSET) -> None:
+    """Edita uma mensagem existente renderizando a marcação.
+
+    Diferente do envio, aqui não há como quebrar em blocos: a edição substitui
+    uma mensagem só. E só erro de parse é tratado — "message is not modified" e
+    semelhantes sobem para o chamador, que já decide se reenvia como mensagem
+    nova em vez de editar.
+    """
+    if parse_mode is _UNSET:
+        parse_mode = DEFAULT_PARSE_MODE
+
+    kwargs = {"text": text}
+    if reply_markup is not _UNSET:
+        kwargs["reply_markup"] = reply_markup
+    if parse_mode:
+        kwargs["parse_mode"] = parse_mode
+
+    try:
+        await edit(**kwargs)
+    except Exception as error:
+        if not (parse_mode and _is_parse_error(error)):
+            raise
+        logger.warning(f"Edicao recusada pelo parse_mode; retry texto puro: {error}")
+        kwargs.pop("parse_mode", None)
+        kwargs["text"] = plain_retry_text(text)
+        await edit(**kwargs)

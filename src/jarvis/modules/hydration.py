@@ -9,6 +9,7 @@ from jarvis.database.persistence import Persistence
 from jarvis.core.context import ContextEngine
 from jarvis.config import Config
 from jarvis.core.utils import is_quiet_hours
+from jarvis.core.telegram_safe import safe_reply_text, safe_send_message
 
 logger = logging.getLogger("modules.hydration")
 
@@ -112,13 +113,16 @@ class HydrationModule:
         """Snooze hydration reminder by N minutes."""
         state = HydrationModule._load_state(chat_id)
         if not state or not state.get("active"):
-            await query.message.reply_text("Hidratação não está ativa.")
+            await safe_reply_text(query.message, "Hidratação não está ativa.")
             return
         from datetime import timedelta
         now = datetime.now(Config.TZ)
         state["last_reminder_at"] = (now + timedelta(minutes=minutes)).isoformat()
         HydrationModule._save_state(chat_id, state)
-        await query.message.reply_text(f"💤 Beleza, te lembro de novo em {minutes} min. Quando beber água, manda `bebi`.")
+        await safe_reply_text(
+            query.message,
+            f"💤 Beleza, te lembro de novo em {minutes} min. Quando beber água, manda `bebi`.",
+        )
 
     @staticmethod
     def activate_flow(chat_id: int) -> str:
@@ -600,7 +604,7 @@ class HydrationModule:
                 # Botões
                 from telegram import InlineKeyboardMarkup, InlineKeyboardButton
                 kb = [[InlineKeyboardButton("✅ Bebi", callback_data="bebi agua"), InlineKeyboardButton("💤 +15min", callback_data="agora nao")]]
-                await app.bot.send_message(chat_id=chat_id, text=msg, reply_markup=InlineKeyboardMarkup(kb))
+                await safe_send_message(app.bot, chat_id, msg, reply_markup=InlineKeyboardMarkup(kb))
 
                 state["last_reminder_at"] = now.isoformat()
                 HydrationModule._save_state(chat_id, state)

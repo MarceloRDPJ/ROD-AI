@@ -83,4 +83,46 @@ async def test_network_info_callback_renders_dossier(monkeypatch):
         query,
     )
 
-    query.edit_message_text.assert_awaited_once_with("dossie do botao")
+    # O botao Detalhes enviava sem parse_mode, entao o dossie chegava com
+    # asterisco e crase a mostra na conversa.
+    query.edit_message_text.assert_awaited_once_with(
+        text="dossie do botao", parse_mode="Markdown"
+    )
+
+
+@pytest.mark.asyncio
+async def test_dossier_callback_falls_back_to_plain_text_when_parse_fails(monkeypatch):
+    """Hostname anunciado pelo aparelho nao pode fazer a mensagem sumir."""
+    monkeypatch.setattr(DeviceIntelligence, "dossier", AsyncMock(return_value={"profile": {}}))
+    monkeypatch.setattr(DeviceIntelligence, "format_dossier", lambda data: "IP `192.168.1.20` *quebrado")
+    query = AsyncMock()
+    query.edit_message_text.side_effect = [Exception("Can't parse entities"), None]
+
+    await Executor(AsyncMock()).handle_network_callback(
+        123,
+        "net_info_192.168.1.20_00:11:22:33:44:55",
+        query,
+    )
+
+    assert query.edit_message_text.await_count == 2
+    retry = query.edit_message_text.await_args.kwargs
+    assert "parse_mode" not in retry
+    assert "192.168.1.20" in retry["text"]
+
+
+@pytest.mark.asyncio
+async def test_edit_does_not_retry_when_message_is_unchanged(monkeypatch):
+    """"message is not modified" nao e erro de parse; quem chama e que decide."""
+    monkeypatch.setattr(DeviceIntelligence, "dossier", AsyncMock(return_value={"profile": {}}))
+    monkeypatch.setattr(DeviceIntelligence, "format_dossier", lambda data: "mesmo texto")
+    query = AsyncMock()
+    query.edit_message_text.side_effect = Exception("message is not modified")
+
+    with pytest.raises(Exception, match="not modified"):
+        await Executor(AsyncMock()).handle_network_callback(
+            123,
+            "net_info_192.168.1.20_00:11:22:33:44:55",
+            query,
+        )
+
+    query.edit_message_text.assert_awaited_once()

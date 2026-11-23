@@ -1,4 +1,6 @@
 import logging
+
+from jarvis.core.telegram_safe import safe_edit_text, safe_send_message
 from datetime import datetime, timedelta, timezone
 from jarvis.database.persistence import Persistence
 from jarvis.core.context import ContextEngine
@@ -22,18 +24,18 @@ class ReminderCallbacks:
     async def _finish_callback(query, text: str):
         if query and hasattr(query, "edit_message_text"):
             try:
-                await query.edit_message_text(text=text)
+                await safe_edit_text(query.edit_message_text, text)
                 return
             except Exception as e:
                 logger.warning(f"Falha ao editar mensagem de lembrete: {e}")
         if query and getattr(query, "message", None) and hasattr(query.message, "edit_text"):
             try:
-                await query.message.edit_text(text=text)
+                await safe_edit_text(query.message.edit_text, text)
                 return
             except Exception as e:
                 logger.warning(f"Falha ao editar mensagem original de lembrete: {e}")
         if query and getattr(query, "bot", None):
-            await query.bot.send_message(chat_id=query.message.chat_id, text=text)
+            await safe_send_message(query.bot, query.message.chat_id, text)
 
     @staticmethod
     async def handle_done(task_id: int, chat_id: int, query):
