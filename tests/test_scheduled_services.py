@@ -105,7 +105,8 @@ async def test_guardian_does_not_blame_power_when_the_pi_never_rebooted(monkeypa
 
 
 @pytest.mark.asyncio
-async def test_guardian_reports_power_loss_when_host_uptime_confirms_reboot(monkeypatch):
+async def test_guardian_reports_reboot_without_naming_a_cause(monkeypatch):
+    """Watchdog, trava e queda de energia dão o mesmo reboot; o ROD não escolhe um."""
     monkeypatch.setattr(
         ContextReader, "detect_gap",
         lambda max_gap_minutes=2: {"status": "ok", "exceeded": True, "gap_minutes": 42.0},
@@ -118,8 +119,10 @@ async def test_guardian_reports_power_loss_when_host_uptime_confirms_reboot(monk
 
     await guardian.check_power_status()
 
-    assert "energia caiu" in guardian.pending_power_msg
-    assert "42" in guardian.pending_power_msg
+    msg = guardian.pending_power_msg
+    assert "42" in msg
+    assert "o Pi reiniciou" in msg
+    assert "energia caiu" not in msg
 
 
 @pytest.mark.asyncio

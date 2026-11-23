@@ -64,9 +64,9 @@ O ROD não afirma a causa de uma interrupção sem evidência. Um intervalo sem 
 
 A distinção é verificável pelo uptime do host: numa queda real o Raspberry Pi reinicia, então seu uptime não pode ser maior que o intervalo observado. Com base nisso:
 
-- Host reiniciado durante o intervalo: o ROD relata queda de energia.
-- Host ligado o tempo todo: foi o serviço que reiniciou. Interrupções curtas ficam só no log; acima de 15 minutos ele avisa, deixando explícito que não houve queda de energia.
-- Uptime indisponível: nenhuma causa é atribuída e nada é enviado.
+- Host reiniciado durante o intervalo: o ROD relata a ausência e o reinício, sem nomear a causa. Queda de energia, trava do sistema e reset do watchdog de hardware produzem o mesmo reinício, e o Pi não expõe sinal que os separe — o driver BCM2835 devolve `bootstatus` 0 em qualquer caso.
+- Host ligado o tempo todo: foi o serviço que reiniciou. Interrupções curtas ficam só no log; acima de 15 minutos ele avisa, deixando explícito que o Pi não reiniciou.
+- Uptime indisponível: nada é afirmado e nada é enviado.
 
 Relatórios e automações por horário disparam uma única vez por período, dentro de uma janela de tolerância de cinco minutos. Os laços de serviço acordam a cada 60 segundos e derivam alguns segundos a cada volta; comparar o minuto por igualdade exata perdia o disparo quando a volta caía fora do minuto, e repetia quando duas voltas caíam dentro dele. A mesma janela impede que um horário vencido há horas seja reenviado atrasado depois de um restart.
 
