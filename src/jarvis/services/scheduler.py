@@ -7,6 +7,7 @@ from jarvis.database.persistence import Persistence
 from jarvis.modules.reminders import get_reminder_message
 from jarvis.modules.hydration import HydrationModule
 from jarvis.config import Config
+from jarvis.core.telegram_safe import safe_send_message
 
 logger = logging.getLogger("services.scheduler")
 
@@ -97,9 +98,10 @@ class SchedulerService:
             # === 2. Envio da Mensagem (Genérico) ===
             message = get_reminder_message(task, now)
             try:
-                await self.app.bot.send_message(
-                    chat_id=chat_id,
-                    text=message,
+                await safe_send_message(
+                    self.app.bot,
+                    chat_id,
+                    message,
                     reply_markup=_build_reminder_markup(task_id),
                     disable_notification=False,
                 )

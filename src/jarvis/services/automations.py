@@ -4,6 +4,7 @@ from datetime import datetime
 from typing import Dict, Any, List
 from jarvis.config import Config
 from jarvis.core.events import Event
+from jarvis.core.telegram_safe import safe_send_message
 from jarvis.core.utils import schedule_is_due
 
 logger = logging.getLogger("services.automations")
@@ -201,10 +202,8 @@ class AutomationEngine:
             chat_id = Config.ALLOWED_USER_ID
 
             try:
-                await self.app.bot.send_message(
-                    chat_id=chat_id,
-                    text=message,
-                    reply_markup=reply_markup,
+                await safe_send_message(
+                    self.app.bot, chat_id, message, reply_markup=reply_markup
                 )
                 logger.info(f"Automação executada: {message[:50]}...")
             except Exception as e:

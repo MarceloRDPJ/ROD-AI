@@ -1,5 +1,6 @@
 import html
 import inspect
+from functools import partial
 import logging
 import re
 from typing import Dict, Any, List
@@ -16,6 +17,11 @@ from jarvis.modules.network import NetworkModule
 from jarvis.modules.hydration import HydrationModule
 from jarvis.modules.adguard import AdGuardClient
 from jarvis.services.device_intelligence import DeviceIntelligence
+from jarvis.core.telegram_safe import (
+    DEFAULT_PARSE_MODE,
+    safe_edit_text,
+    safe_send_message,
+)
 from datetime import datetime
 from jarvis.config import Config
 import os
@@ -143,6 +149,7 @@ class Executor:
             status_msg = await self.app.bot.send_message(
                 chat_id=chat_id,
                 text="⏳ Iniciando varredura profunda da rede...",
+                parse_mode=DEFAULT_PARSE_MODE,
             )
 
             # 2. Callback for Updates
@@ -151,10 +158,13 @@ class Executor:
                 nonlocal last_text
                 if text != last_text:
                     try:
-                        await self.app.bot.edit_message_text(
-                            chat_id=chat_id,
-                            message_id=status_msg.message_id,
-                            text=text,
+                        await safe_edit_text(
+                            partial(
+                                self.app.bot.edit_message_text,
+                                chat_id=chat_id,
+                                message_id=status_msg.message_id,
+                            ),
+                            text,
                         )
                         last_text = text
                     except Exception as e:
@@ -204,10 +214,13 @@ class Executor:
                 try:
                     from telegram import InlineKeyboardMarkup, InlineKeyboardButton
                     keyboard = [[InlineKeyboardButton("🔄 Escanear Novamente", callback_data="quem ta na rede")]]
-                    await self.app.bot.edit_message_text(
-                        chat_id=chat_id,
-                        message_id=status_msg.message_id,
-                        text=final_text,
+                    await safe_edit_text(
+                        partial(
+                            self.app.bot.edit_message_text,
+                            chat_id=chat_id,
+                            message_id=status_msg.message_id,
+                        ),
+                        final_text,
                         reply_markup=InlineKeyboardMarkup(keyboard),
                     )
                     return None # Already sent response via edit
@@ -508,9 +521,8 @@ class Executor:
         # Removed old menu handlers that delegated to _build_menu
 
         if intent == "network_speed":
-            await self.app.bot.send_message(
-                chat_id=chat_id,
-                text="🚀 Medindo a conexão pelo Raspberry Pi...",
+            await safe_send_message(
+                self.app.bot, chat_id, "🚀 Medindo a conexão pelo Raspberry Pi..."
             )
             return await NetworkModule.run_speedtest()
 
@@ -880,17 +892,17 @@ class Executor:
         action = parts[1] # reg, block, ignore
 
         if action == "ignore":
-            await query.edit_message_text("👁️ Dispositivo ignorado.")
+            await safe_edit_text(query.edit_message_text, "👁️ Dispositivo ignorado.")
             return
 
         if action == "info":
             ip = parts[2]
             mac = parts[3] if len(parts) > 3 else await NetworkModule.resolve_mac_by_ip(ip)
             if not mac:
-                await query.edit_message_text("Nao consegui obter o MAC desse IP agora.")
+                await safe_edit_text(query.edit_message_text, "Não consegui obter o MAC desse IP agora.")
                 return
             dossier = await DeviceIntelligence.dossier(ip, mac)
-            await query.edit_message_text(DeviceIntelligence.format_dossier(dossier))
+            await safe_edit_text(query.edit_message_text, DeviceIntelligence.format_dossier(dossier))
             return
 
         if action == "block":
@@ -903,8 +915,9 @@ class Executor:
                 "params": {"ip": ip, "confirmed": True},
             })
             confirmation = self._confirmation_prompt("network_block_device", {"ip": ip})
-            await query.edit_message_text(
-                text=confirmation["text"],
+            await safe_edit_text(
+                query.edit_message_text,
+                confirmation["text"],
                 reply_markup=confirmation["reply_markup"],
             )
             return
@@ -919,7 +932,7 @@ class Executor:
                  mac = await NetworkModule.resolve_mac_by_ip(ip)
 
             if not mac:
-                 await query.edit_message_text("❌ Não consegui identificar o MAC address para cadastro.")
+                 await safe_edit_text(query.edit_message_text, "❌ Não consegui identificar o MAC address para cadastro.")
                  return
 
             # Start Flow
@@ -931,7 +944,10 @@ class Executor:
                 }
             })
 
-            await query.edit_message_text(f"📝 *Cadastro de Dispositivo*\nIP: `{ip}`\nMAC: `{mac}`\n\nQual nome você quer dar para ele?")
+            await safe_edit_text(
+                query.edit_message_text,
+                f"📝 *Cadastro de Dispositivo*\nIP: `{ip}`\nMAC: `{mac}`\n\nQual nome você quer dar para ele?",
+            )
             return
 
     async def _handle_network_registration(self, chat_id: int, text: str, ctx: Dict) -> str:

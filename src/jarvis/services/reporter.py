@@ -5,6 +5,7 @@ from jarvis.database.persistence import Persistence
 from jarvis.config import Config
 from jarvis.modules.system import SystemModule
 from jarvis.modules.network import NetworkModule
+from jarvis.core.telegram_safe import safe_send_message
 from jarvis.core.utils import schedule_is_due
 
 logger = logging.getLogger("services.reporter")
@@ -66,10 +67,7 @@ class ReporterService:
     async def _send_daily_report(self):
         report = await self._build_daily_report()
         try:
-            await self.app.bot.send_message(
-                chat_id=Config.ALLOWED_USER_ID,
-                text=report,
-            )
+            await safe_send_message(self.app.bot, Config.ALLOWED_USER_ID, report)
             logger.info("Relatorio diario enviado com sucesso")
         except Exception as e:
             logger.error(f"Falha ao enviar relatorio diario: {e}")
@@ -77,10 +75,7 @@ class ReporterService:
     async def _send_weekly_report(self):
         report = await self._build_weekly_report()
         try:
-            await self.app.bot.send_message(
-                chat_id=Config.ALLOWED_USER_ID,
-                text=report,
-            )
+            await safe_send_message(self.app.bot, Config.ALLOWED_USER_ID, report)
             logger.info("Relatorio semanal enviado com sucesso")
         except Exception as e:
             logger.error(f"Falha ao enviar relatorio semanal: {e}")

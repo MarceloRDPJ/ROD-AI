@@ -76,7 +76,19 @@ A razão de ler sempre `Config.TIMEZONE` é outra: data e hora **ingênuas** atr
 
 ## Formatação das mensagens
 
-As mensagens do ROD são escritas com marcação Markdown — `comando` em monoespaçado, *destaque* em negrito. Nenhum chamador passava `parse_mode`, então o Telegram mostrava crase e asterisco como texto literal em toda a ajuda, nos menus e nos alertas do guardião. O padrão agora vive nos remetentes seguros (`safe_reply_text`, `safe_send_message`) e nas edições de menu, e quem precisa de texto cru passa `parse_mode=None` explicitamente.
+As mensagens do ROD são escritas com marcação Markdown — `comando` em monoespaçado, *destaque* em negrito. Nenhum chamador passava `parse_mode`, então o Telegram mostrava crase e asterisco como texto literal em toda a ajuda, nos menus, nos alertas do guardião e no dossiê aberto pelo botão `Detalhes`.
+
+**Todo** envio ao Telegram passa por um dos três remetentes seguros, e essa é a regra: nenhum módulo chama `reply_text`, `send_message` ou `edit_message_text` direto.
+
+| Remetente | Para quê |
+|---|---|
+| `safe_reply_text` | resposta a uma mensagem do usuário |
+| `safe_send_message` | mensagem proativa — guardião, lembretes, relatórios, automações |
+| `safe_edit_text` | edição de mensagem existente — menus, botões, progresso de varredura |
+
+Quem precisa de texto cru passa `parse_mode=None` explicitamente. A única chamada direta que resta é o envio inicial da varredura de rede, porque ele precisa do objeto de mensagem devolvido para editar o progresso depois; ela carrega o `parse_mode` padrão explicitamente.
+
+`safe_edit_text` não quebra o texto em blocos, já que uma edição substitui uma mensagem só, e trata apenas erro de parse: falhas como `message is not modified` sobem para o chamador, que decide por conta própria se reenvia como mensagem nova.
 
 Duas proteções acompanham essa escolha:
 
