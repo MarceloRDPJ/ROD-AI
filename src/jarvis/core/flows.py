@@ -68,8 +68,10 @@ class RemindersFlow:
             dt = datetime.fromisoformat(target_date_iso)
             time_display = format_pt_br(dt)
         else:
-            # Fallback (não deve acontecer com novo parser, mas por segurança)
-            dt = datetime.now() + timedelta(minutes=minutes)
+            # Fallback (não deve acontecer com novo parser, mas por segurança).
+            # Precisa ser consciente de fuso: o scheduler trata data ingênua
+            # como UTC, o que adiantaria o lembrete em 3 horas.
+            dt = datetime.now(Config.TZ) + timedelta(minutes=minutes)
             time_display = format_pt_br(dt)
             # Atualiza state com target_date calculado
             flow_state["data"]["target_date"] = dt.isoformat()

@@ -6,6 +6,7 @@ from typing import Dict, Any, List, Set, Optional
 from jarvis.core.context_reader import ContextReader
 from jarvis.core.context import ContextEngine
 from jarvis.modules.network import NetworkModule
+from jarvis.modules.system import SystemModule
 from jarvis.database.persistence import Persistence
 from jarvis.services.automation_helpers import build_unknown_device_markup
 from jarvis.services.device_intelligence import DeviceIntelligence
@@ -33,6 +34,11 @@ class GuardianService:
         self.PING_INTERVAL = 15
         self.DEVICE_SCAN_INTERVAL = 60
         self.POWER_GAP_THRESHOLD_MINUTES = 2
+        # Folga para o custo de subir o processo entre o último snapshot e esta
+        # leitura; sem ela um reboot real poderia passar por reinício de serviço.
+        self.REBOOT_MARGIN_MINUTES = 3
+        # Abaixo disso, reinício de serviço não vira mensagem.
+        self.SERVICE_RESTART_REPORT_MINUTES = 15
 
         self.internet_state = "online"
         self.consecutive_ping_failures = 0
@@ -72,16 +78,55 @@ class GuardianService:
     async def check_power_status(self):
         try:
             result = ContextReader.detect_gap(max_gap_minutes=self.POWER_GAP_THRESHOLD_MINUTES)
-            if result.get("status") == "ok" and result.get("exceeded"):
-                gap = result.get("gap_minutes", 0)
-                if gap >= 10:
-                    msg = f"Ei, a energia caiu e ficou fora por uns {int(gap)} minutos. Já conferi os serviços e tá tudo ok."
-                else:
-                    msg = "Parece que a energia caiu por um tempo. Agora voltou e tô subindo tudo de novo."
-                self.pending_power_msg = msg
-                logger.info(f"Queda de energia detectada. Mensagem na fila: {msg}")
+            if result.get("status") != "ok" or not result.get("exceeded"):
+                return
+
+            gap = result.get("gap_minutes", 0)
+            msg = await self._explain_downtime(gap)
+            if not msg:
+                return
+
+            self.pending_power_msg = msg
+            logger.info(f"Interrupcao confirmada por uptime do host. Mensagem na fila: {msg}")
         except Exception as e:
             logger.error(f"Erro ao verificar status de energia: {e}")
+
+    async def _explain_downtime(self, gap_minutes: float) -> Optional[str]:
+        """Só chama de queda de energia o que o uptime do Pi comprova.
+
+        Um intervalo sem snapshot também aparece quando apenas o serviço
+        reinicia — deploy, atualização ou crash do contêiner. Nesses casos o Pi
+        nunca desligou, e anunciar queda de energia é afirmar uma causa sem
+        evidência. A distinção é verificável: numa queda real o host reinicia,
+        então o uptime dele não pode ser maior que o intervalo observado.
+        """
+        try:
+            raw = await SystemModule.get_raw_status()
+            host_uptime_minutes = float(raw["uptime_seconds"]) / 60
+        except Exception:
+            logger.exception("Sem uptime do host; nao da para atribuir causa ao intervalo")
+            return None
+
+        host_rebooted = host_uptime_minutes <= gap_minutes + self.REBOOT_MARGIN_MINUTES
+        if not host_rebooted:
+            # O Pi continuou ligado o tempo todo: foi o serviço que caiu.
+            logger.info(
+                "Intervalo de %.1f min sem queda de energia: host ligado ha %.1f min.",
+                gap_minutes, host_uptime_minutes,
+            )
+            if gap_minutes < self.SERVICE_RESTART_REPORT_MINUTES:
+                # Reinício curto de serviço não é notícia; avisar a cada deploy
+                # virava spam. Fica no log.
+                return None
+            return (
+                f"Fiquei fora do ar por uns {int(gap_minutes)} minutos. "
+                "O Pi não reiniciou, então não foi queda de energia: foi o meu serviço. "
+                "Já voltei."
+            )
+
+        if gap_minutes >= 10:
+            return f"Ei, a energia caiu e ficou fora por uns {int(gap_minutes)} minutos. Já conferi os serviços e tá tudo ok."
+        return "Parece que a energia caiu por um tempo. Agora voltou e tô subindo tudo de novo."
 
     async def check_internet_status(self):
         metrics = await NetworkModule.get_ping_metrics()
